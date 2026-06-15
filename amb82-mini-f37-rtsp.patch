@@ -1,0 +1,55 @@
+diff --git a/component/video/driver/RTL8735B/video_api.c b/component/video/driver/RTL8735B/video_api.c
+index fbdc888..756d85e 100755
+--- a/component/video/driver/RTL8735B/video_api.c
++++ b/component/video/driver/RTL8735B/video_api.c
+@@ -2977,7 +2977,7 @@ void voe_t2ff_prealloc(void)
+ int voe_boot_fsc_status(void)// 1 : Inited 0: Non-Inited
+ {
+ 	//video_dprintf(VIDEO_LOG_INF, "isp_boot->fcs_status %d\r\n", isp_boot->fcs_status);
+-	return isp_boot->fcs_status;
++	return 0; // force non-FCS: let app do full sensor init (FCS unreliable on this board)
+ }
+ 
+ int voe_boot_fsc_id(void)//
+diff --git a/component/video/driver/RTL8735B/video_user_boot.c b/component/video/driver/RTL8735B/video_user_boot.c
+index 26e9e0c..fbf26f3 100755
+--- a/component/video/driver/RTL8735B/video_user_boot.c
++++ b/component/video/driver/RTL8735B/video_user_boot.c
+@@ -48,7 +48,7 @@ video_boot_stream_t video_boot_stream = {
+ 				.out_rsvd_size = 0,
+ 				.direct_output = 0,
+ 				.use_static_addr = 0,
+-				.fcs = 1 //Enable the fcs for channel 0
++				.fcs = 0 //Enable the fcs for channel 0
+ 	},
+ 	.bps_stbl_ctrl_params[STREAM_V1] = {
+ 		.sampling_time = 2000,
+diff --git a/project/realtek_amebapro2_v0_example/inc/sensor.h b/project/realtek_amebapro2_v0_example/inc/sensor.h
+index f1e5f8e..1c4e2c4 100755
+--- a/project/realtek_amebapro2_v0_example/inc/sensor.h
++++ b/project/realtek_amebapro2_v0_example/inc/sensor.h
+@@ -164,20 +164,22 @@ static const struct sensor_params_t sensor_params[] = {
+ 	[SENSOR_OV12890_12M_SEQ]  = {2112,  1616, 5}, //width = 2016 + 96(overlap) //height = 1512 + 104(overlap)
+ };
+ 
+-#define SENSOR_MAX         5
++#define SENSOR_MAX         6
+ 
+ static const unsigned char sen_id[SENSOR_MAX] = {
+ 	SENSOR_DUMMY,
++	SENSOR_F37,
+ 	SENSOR_GC2053,
+ 	SENSOR_GC4653,
+ 	SENSOR_GC4023,
+ 	SENSOR_SC2333
+ };
+ 
+-#define USE_SENSOR      	SENSOR_GC2053
++#define USE_SENSOR      	SENSOR_F37
+ 
+ static const      char manual_iq[SENSOR_MAX][64] = {
+ 	"iq",
++	"iq_f37",
+ 	"iq_gc2053",
+ 	"iq_gc4653",
+ 	"iq_gc4023",
