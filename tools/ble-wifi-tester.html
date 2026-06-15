@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AMB82 · BLE Wi-Fi 配網測試台</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+<style>
+  :root{
+    --bg:#070b0a;--bg2:#0b1110;--panel:#0e1715;--panel-edge:#1c2a27;
+    --ink:#c9d6d1;--ink-dim:#6f827c;--ink-faint:#46544f;
+    --phos:#39e0a0;--phos-deep:#1c8f66;--amber:#f5b73d;--red:#ff5a52;--orange:#ff8c3b;--blue:#7cc7ff;
+    --mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+    --disp:'Chakra Petch',var(--mono);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    font-family:var(--mono);color:var(--ink);
+    background:
+      radial-gradient(1200px 600px at 82% -10%, rgba(57,224,160,.07), transparent 60%),
+      radial-gradient(900px 500px at -10% 110%, rgba(245,183,61,.05), transparent 55%),
+      linear-gradient(180deg,var(--bg),var(--bg2));
+    min-height:100%;-webkit-font-smoothing:antialiased;letter-spacing:.01em;
+  }
+  body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:9;
+    background:repeating-linear-gradient(180deg,rgba(255,255,255,.018) 0 1px,transparent 1px 3px);
+    mix-blend-mode:overlay;opacity:.5;}
+  .wrap{max-width:980px;margin:0 auto;padding:34px 22px 60px}
+
+  header{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;
+    border-bottom:1px solid var(--panel-edge);padding-bottom:18px;animation:rise .5s ease both;}
+  .brand{display:flex;flex-direction:column;gap:6px}
+  .kicker{font-family:var(--disp);font-weight:600;letter-spacing:.42em;text-transform:uppercase;font-size:11px;color:var(--phos);}
+  h1{font-family:var(--disp);font-weight:700;margin:0;font-size:30px;line-height:1;color:var(--ink);}
+  h1 span{color:var(--ink-faint)}
+  .sub{font-size:12px;color:var(--ink-dim);letter-spacing:.06em}
+  .conn-pill{display:inline-flex;align-items:center;gap:9px;font-family:var(--disp);font-weight:600;font-size:12px;
+    letter-spacing:.12em;text-transform:uppercase;padding:9px 14px;border:1px solid var(--panel-edge);border-radius:2px;
+    background:#0a1211;color:var(--ink-dim);white-space:nowrap;}
+  .conn-pill .dot{width:9px;height:9px;border-radius:50%;background:var(--ink-faint)}
+  .conn-pill.on{color:var(--phos);border-color:var(--phos-deep)}
+  .conn-pill.on .dot{background:var(--phos);box-shadow:0 0 10px var(--phos)}
+
+  .grid{display:grid;grid-template-columns:1.15fr .85fr;gap:18px;margin-top:24px}
+  @media(max-width:760px){.grid{grid-template-columns:1fr}}
+  .panel{position:relative;background:linear-gradient(180deg,var(--panel),#0a1210);border:1px solid var(--panel-edge);
+    border-radius:4px;padding:20px;box-shadow:inset 0 1px 0 rgba(255,255,255,.03),0 18px 40px -28px #000;animation:rise .55s ease both;}
+  .panel::before{content:"";position:absolute;inset:7px;border-radius:2px;pointer-events:none;opacity:.4;
+    background:linear-gradient(var(--phos-deep),var(--phos-deep)) left top/12px 1px no-repeat,
+      linear-gradient(var(--phos-deep),var(--phos-deep)) left top/1px 12px no-repeat,
+      linear-gradient(var(--phos-deep),var(--phos-deep)) right bottom/12px 1px no-repeat,
+      linear-gradient(var(--phos-deep),var(--phos-deep)) right bottom/1px 12px no-repeat;}
+  .panel h2{font-family:var(--disp);font-weight:600;font-size:12px;letter-spacing:.26em;text-transform:uppercase;
+    color:var(--ink-dim);margin:0 0 16px;display:flex;align-items:center;gap:10px}
+  .panel h2::before{content:"";width:14px;height:1px;background:var(--phos);box-shadow:0 0 6px var(--phos)}
+  .delay1{animation-delay:.06s}.delay2{animation-delay:.12s}.delay3{animation-delay:.18s}
+
+  label.fld{display:block;margin-bottom:15px}
+  .fld .lab{font-size:10.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-dim);margin-bottom:7px}
+  .inp{width:100%;background:#060c0b;border:1px solid var(--panel-edge);border-radius:3px;color:var(--ink);
+    font-family:var(--mono);font-size:14px;padding:12px 13px;outline:none;transition:border-color .15s,box-shadow .15s;}
+  .inp:focus{border-color:var(--phos-deep);box-shadow:0 0 0 3px rgba(57,224,160,.10)}
+  .inp::placeholder{color:var(--ink-faint)}
+  .pw-row{position:relative}.pw-row .inp{padding-right:64px}
+  .pw-toggle{position:absolute;right:6px;top:6px;bottom:6px;padding:0 12px;background:#0c1614;border:1px solid var(--panel-edge);
+    color:var(--ink-dim);border-radius:2px;font-family:var(--mono);font-size:11px;cursor:pointer;letter-spacing:.08em}
+  .pw-toggle:hover{color:var(--phos);border-color:var(--phos-deep)}
+  .hint{font-size:11px;color:var(--ink-faint);margin-top:6px;line-height:1.5}
+
+  .btn{font-family:var(--disp);font-weight:600;letter-spacing:.12em;text-transform:uppercase;font-size:13px;
+    border:1px solid var(--phos-deep);background:linear-gradient(180deg,#11201b,#0c1714);color:var(--phos);
+    padding:13px 16px;border-radius:3px;cursor:pointer;width:100%;transition:.15s;}
+  .btn:hover:not(:disabled){background:#14271f;box-shadow:0 0 0 3px rgba(57,224,160,.10),0 0 18px -4px var(--phos)}
+  .btn:active:not(:disabled){transform:translateY(1px)}
+  .btn.alt{border-color:var(--panel-edge);color:var(--ink-dim);background:#0a1211}
+  .btn.alt:hover:not(:disabled){color:var(--ink);border-color:var(--ink-dim);box-shadow:none}
+  .btn:disabled{opacity:.4;cursor:not-allowed}
+  .btn-row{display:flex;gap:10px;margin-top:4px}
+
+  .status-core{display:flex;align-items:center;gap:18px;padding:6px 2px 12px}
+  .led{--c:var(--ink-faint);width:52px;height:52px;border-radius:50%;flex:none;position:relative;transition:--c .3s;
+    background:radial-gradient(circle at 38% 34%, color-mix(in srgb,var(--c) 92%,white), var(--c) 60%, #0a0a0a 110%);
+    box-shadow:0 0 0 1px rgba(255,255,255,.06),0 0 22px -2px var(--c),inset 0 -6px 12px rgba(0,0,0,.5);}
+  .led.pulse{animation:pulse 1s ease-in-out infinite}
+  .status-text .st{font-family:var(--disp);font-weight:700;font-size:22px;line-height:1.1;color:var(--ink)}
+  .status-text .code{font-size:11px;color:var(--ink-dim);letter-spacing:.14em;text-transform:uppercase;margin-top:5px}
+  .ip{margin-top:2px;font-size:12px;color:var(--phos)}
+  .legend{border-top:1px solid var(--panel-edge);margin-top:8px;padding-top:14px;display:grid;gap:8px}
+  .legend .row{display:flex;align-items:center;gap:10px;font-size:11px;color:var(--ink-dim)}
+  .chip{width:9px;height:9px;border-radius:50%;flex:none;box-shadow:0 0 8px -1px currentColor}
+
+  /* rtsp module */
+  .rtsp{margin-top:18px;animation:rise .6s ease both;animation-delay:.16s}
+  .url-row{display:flex;gap:8px;align-items:stretch;margin-bottom:6px}
+  .url-row .inp{flex:1}
+  .copy{flex:none;padding:0 14px;background:#0c1614;border:1px solid var(--panel-edge);color:var(--ink-dim);
+    border-radius:3px;font-family:var(--mono);font-size:11px;cursor:pointer;letter-spacing:.08em;white-space:nowrap}
+  .copy:hover{color:var(--phos);border-color:var(--phos-deep)}
+  .cmd{background:#050908;border:1px solid var(--panel-edge);border-radius:3px;padding:11px 12px;font-size:12px;
+    color:var(--blue);white-space:pre-wrap;word-break:break-all;line-height:1.5;position:relative}
+  .sub-h{font-size:10.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-dim);margin:16px 0 8px;display:flex;gap:8px;align-items:center}
+  .sub-h::before{content:"▹";color:var(--phos)}
+  video{width:100%;border-radius:4px;background:#000;border:1px solid var(--panel-edge);margin-top:10px;display:block;aspect-ratio:16/9}
+  .vstat{font-size:11px;color:var(--ink-faint);margin-top:6px}
+
+  .term-wrap{margin-top:18px;animation:rise .6s ease both;animation-delay:.22s}
+  .term{background:#050908;border:1px solid var(--panel-edge);border-radius:4px;font-size:12.5px;line-height:1.65;
+    height:210px;overflow:auto;padding:14px 15px;box-shadow:inset 0 0 60px -30px var(--phos);}
+  .term .ln{white-space:pre-wrap;word-break:break-word}
+  .term .t{color:var(--ink-faint)}.term .i{color:var(--ink-dim)}.term .ok{color:var(--phos)}
+  .term .warn{color:var(--amber)}.term .err{color:var(--red)}.term .tx{color:var(--blue)}.term .rx{color:var(--phos)}
+
+  details.adv{margin-top:18px;border:1px solid var(--panel-edge);border-radius:4px;background:#0a1110}
+  details.adv summary{cursor:pointer;list-style:none;padding:13px 16px;font-family:var(--disp);font-weight:600;
+    font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-dim)}
+  details.adv summary::-webkit-details-marker{display:none}
+  details.adv summary::before{content:"▸ ";color:var(--phos)}
+  details.adv[open] summary::before{content:"▾ "}
+  .uuid-grid{padding:4px 16px 18px;display:grid;gap:9px}
+  .uuid-grid .u{display:grid;grid-template-columns:120px 1fr;gap:10px;align-items:center}
+  .uuid-grid .u .k{font-size:11px;color:var(--ink-dim);letter-spacing:.1em;text-transform:uppercase}
+  .uuid-grid .u input{font-size:11.5px;padding:8px 10px;background:#060c0b}
+
+  .banner{padding:13px 16px;border-radius:4px;font-size:12.5px;line-height:1.55;margin-bottom:18px;border:1px solid;display:none}
+  .banner.show{display:block;animation:rise .4s ease both}
+  .banner.err{border-color:#5a1f1c;background:#190d0c;color:#ffb3ae}
+  .banner.warn{border-color:#5a4a1c;background:#171206;color:#ffd98a}
+
+  footer{margin-top:28px;font-size:11px;color:var(--ink-faint);text-align:center;letter-spacing:.06em;line-height:1.7}
+  code{font-family:var(--mono);color:var(--phos);background:#0c1614;padding:1px 6px;border-radius:3px;font-size:.92em}
+
+  @keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+  @keyframes pulse{0%,100%{box-shadow:0 0 0 1px rgba(255,255,255,.06),0 0 12px -2px var(--c),inset 0 -6px 12px rgba(0,0,0,.5)}
+    50%{box-shadow:0 0 0 1px rgba(255,255,255,.08),0 0 30px 2px var(--c),inset 0 -6px 12px rgba(0,0,0,.5)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <div class="kicker">Jet-Opto · AMB82-mini</div>
+      <h1>BLE Wi-Fi <span>/</span> 配網測試台</h1>
+      <div class="sub">RTL8735B · GATT provisioning · RTSP preview</div>
+    </div>
+    <div id="connPill" class="conn-pill"><span class="dot"></span><span id="connText">未連線</span></div>
+  </header>
+
+  <div id="banner" class="banner"></div>
+
+  <div class="grid">
+    <section class="panel delay1">
+      <h2>裝置連線</h2>
+      <div class="btn-row">
+        <button id="btnConnect" class="btn">掃描並連線</button>
+        <button id="btnDisconnect" class="btn alt" disabled>斷線</button>
+      </div>
+      <div class="hint" id="devInfo">廣播名稱以 <code>Ameba_</code> 開頭 · 需 Chrome / Edge + localhost 或 https</div>
+
+      <div style="height:18px"></div>
+      <h2>Wi-Fi 憑證</h2>
+      <label class="fld">
+        <div class="lab">SSID</div>
+        <input id="ssid" class="inp" type="text" maxlength="32" placeholder="你的 Wi-Fi 名稱" autocomplete="off">
+      </label>
+      <label class="fld">
+        <div class="lab">密碼</div>
+        <div class="pw-row">
+          <input id="pass" class="inp" type="password" maxlength="64" placeholder="留空 = 開放網路" autocomplete="off">
+          <button id="pwToggle" class="pw-toggle" type="button">顯示</button>
+        </div>
+        <div class="hint">安全性由韌體自動判斷:有密碼 → WPA2,無密碼 → 開放</div>
+      </label>
+      <button id="btnProvision" class="btn" disabled>送出並連線 ▸</button>
+    </section>
+
+    <section class="panel delay2">
+      <h2>裝置狀態</h2>
+      <div class="status-core">
+        <div id="led" class="led" style="--c:var(--ink-faint)"></div>
+        <div class="status-text">
+          <div id="stText" class="st">待命</div>
+          <div id="stCode" class="code">STATUS — 0x00</div>
+          <div id="ip" class="ip"></div>
+        </div>
+      </div>
+      <div class="legend">
+        <div class="row"><span class="chip" style="color:#6f827c;background:#46544f"></span>0x00 待命 (idle)</div>
+        <div class="row"><span class="chip" style="color:#f5b73d;background:#f5b73d"></span>0x01 連線中 (connecting)</div>
+        <div class="row"><span class="chip" style="color:#39e0a0;background:#39e0a0"></span>0x02 已連上 (connected)</div>
+        <div class="row"><span class="chip" style="color:#ff5a52;background:#ff5a52"></span>0x03 連線失敗 (fail)</div>
+        <div class="row"><span class="chip" style="color:#ff8c3b;background:#ff8c3b"></span>0x04 密碼錯誤 (wrong key)</div>
+      </div>
+    </section>
+  </div>
+
+  <!-- RTSP 串流 -->
+  <div class="rtsp">
+    <div class="panel">
+      <h2>RTSP 串流</h2>
+      <label class="fld" style="margin-bottom:10px">
+        <div class="lab">裝置 IP(連上後自動帶入,也可手動輸入)</div>
+        <div class="url-row">
+          <input id="devip" class="inp" type="text" placeholder="192.168.x.x" autocomplete="off">
+          <button class="copy" data-copy="#rtspurl">複製 URL</button>
+        </div>
+      </label>
+      <div class="cmd" id="rtspurl">rtsp://—:554</div>
+
+      <div class="sub-h">外部播放器(最即時)</div>
+      <div class="url-row">
+        <div class="cmd" id="ffplaycmd" style="flex:1">ffplay -rtsp_transport tcp rtsp://—:554</div>
+        <button class="copy" data-copy="#ffplaycmd">複製</button>
+      </div>
+      <div class="hint">VLC:選「媒體 → 開啟網路串流」貼上 URL 即可。</div>
+
+      <div class="sub-h">瀏覽器內預覽(需 ffmpeg 轉 HLS)</div>
+      <div class="hint" style="margin-top:0">1) 在 <code>tools/</code> 另開終端機執行下面指令(把 RTSP 轉成 HLS,寫到 <code>tools/hls/</code>):</div>
+      <div class="url-row" style="margin-top:8px">
+        <div class="cmd" id="ffmpegcmd" style="flex:1">—</div>
+        <button class="copy" data-copy="#ffmpegcmd">複製</button>
+      </div>
+      <div class="hint">2) 確保此頁是用 <code>python3 -m http.server 8000</code> 在 <code>tools/</code> 開啟,然後按播放:</div>
+      <div class="url-row" style="margin-top:8px">
+        <input id="hlsurl" class="inp" type="text" value="http://localhost:8000/hls/stream.m3u8">
+        <button id="btnPlay" class="copy">▶ 載入串流</button>
+        <button id="btnStop" class="copy">■ 停</button>
+      </div>
+      <video id="video" controls muted playsinline></video>
+      <div id="vstat" class="vstat">尚未載入。HLS 約有 2–4 秒延遲;要更即時用上面的 ffplay。</div>
+    </div>
+  </div>
+
+  <div class="term-wrap">
+    <div class="panel" style="padding:14px 16px">
+      <h2 style="margin-bottom:10px">協定流程 LOG <span style="flex:1"></span>
+        <button id="btnClear" class="pw-toggle" style="position:static;letter-spacing:.1em">清除</button>
+      </h2>
+      <div id="term" class="term"></div>
+    </div>
+  </div>
+
+  <details class="adv">
+    <summary>進階 · GATT UUID(韌體若改可在此調整)</summary>
+    <div class="uuid-grid">
+      <div class="u"><span class="k">Name Prefix</span><input id="u_prefix" class="inp" value="Ameba_"></div>
+      <div class="u"><span class="k">Service</span><input id="u_svc" class="inp" value="0000a100-0000-1000-8000-00805f9b34fb"></div>
+      <div class="u"><span class="k">SSID (W)</span><input id="u_ssid" class="inp" value="0000a101-0000-1000-8000-00805f9b34fb"></div>
+      <div class="u"><span class="k">PASS (W)</span><input id="u_pass" class="inp" value="0000a102-0000-1000-8000-00805f9b34fb"></div>
+      <div class="u"><span class="k">CTRL (W)</span><input id="u_ctrl" class="inp" value="0000a103-0000-1000-8000-00805f9b34fb"></div>
+      <div class="u"><span class="k">STATUS (N)</span><input id="u_stat" class="inp" value="0000a104-0000-1000-8000-00805f9b34fb"></div>
+      <div class="u"><span class="k">IP (N)</span><input id="u_ip2" class="inp" value="0000a105-0000-1000-8000-00805f9b34fb"></div>
+    </div>
+  </details>
+
+  <footer>
+    寫入順序:SSID → PASS → CTRL=<code>0x01</code> · STATUS / IP 透過 notify 回報<br>
+    Web Bluetooth 僅支援 Chrome / Edge,且需安全來源(<code>https</code> 或 <code>http://localhost</code>)· 瀏覽器無法直接播 RTSP,故用 ffmpeg→HLS
+  </footer>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const U = () => ({
+  prefix:$('u_prefix').value.trim(), svc:$('u_svc').value.trim().toLowerCase(),
+  ssid:$('u_ssid').value.trim().toLowerCase(), pass:$('u_pass').value.trim().toLowerCase(),
+  ctrl:$('u_ctrl').value.trim().toLowerCase(), stat:$('u_stat').value.trim().toLowerCase(),
+  ip:$('u_ip2').value.trim().toLowerCase(),
+});
+let device=null, server=null, chars={};
+const STATES={0:{t:'待命',c:'var(--ink-faint)',pulse:false},1:{t:'連線中',c:'var(--amber)',pulse:true},
+  2:{t:'已連上',c:'var(--phos)',pulse:false},3:{t:'連線失敗',c:'var(--red)',pulse:false},4:{t:'密碼錯誤',c:'var(--orange)',pulse:false}};
+
+function pad(n){return String(n).padStart(2,'0')}
+function log(msg,cls='i'){
+  const d=new Date();
+  const ts=`${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${String(d.getMilliseconds()).padStart(3,'0')}`;
+  const el=document.createElement('div');el.className='ln';
+  el.innerHTML=`<span class="t">${ts}</span>  <span class="${cls}">${msg}</span>`;
+  const term=$('term');term.appendChild(el);term.scrollTop=term.scrollHeight;
+}
+$('btnClear').onclick=()=>$('term').innerHTML='';
+
+function setConnected(on){
+  $('connPill').classList.toggle('on',on);
+  $('connText').textContent=on?'已連線':'未連線';
+  $('btnConnect').disabled=on;$('btnDisconnect').disabled=!on;$('btnProvision').disabled=!on;
+}
+function setStatus(code){
+  const s=STATES[code]||{t:'未知',c:'var(--red)',pulse:false};
+  const led=$('led');led.style.setProperty('--c',s.c);led.classList.toggle('pulse',s.pulse);
+  $('stText').textContent=s.t;$('stCode').textContent='STATUS — 0x'+pad(code.toString(16));
+}
+
+/* rtsp url + commands */
+function refreshRtsp(){
+  const ip=$('devip').value.trim()||'—';
+  $('rtspurl').textContent='rtsp://'+ip+':554';
+  $('ffplaycmd').textContent='ffplay -rtsp_transport tcp rtsp://'+ip+':554';
+  $('ffmpegcmd').textContent='mkdir -p hls && ffmpeg -rtsp_transport tcp -i rtsp://'+ip+':554 \\\n'
+    +'  -c:v copy -f hls -hls_time 1 -hls_list_size 3 \\\n'
+    +'  -hls_flags delete_segments+omit_endlist hls/stream.m3u8';
+}
+$('devip').addEventListener('input',refreshRtsp);
+
+function envCheck(){
+  const b=$('banner');
+  if(!navigator.bluetooth){
+    b.className='banner err show';
+    b.innerHTML='此瀏覽器不支援 Web Bluetooth。請用 <b>Chrome 或 Edge</b>(桌機 / Android)。iOS 需用原生 App。';
+    $('btnConnect').disabled=true;return;
+  }
+  if(!window.isSecureContext){
+    b.className='banner warn show';
+    b.innerHTML='目前非安全來源,藍牙可能無法啟用。請以 <code>http://localhost</code> 開啟<br>'+
+      '在 <code>tools/</code> 執行 <code>python3 -m http.server 8000</code>,再開 <code>http://localhost:8000/ble-wifi-tester.html</code>';
+  }
+}
+
+async function connect(){
+  const u=U();
+  try{
+    log('requestDevice — namePrefix "'+u.prefix+'"','i');
+    device=await navigator.bluetooth.requestDevice({filters:[{namePrefix:u.prefix}],optionalServices:[u.svc]});
+    device.addEventListener('gattserverdisconnected',onDisconnected);
+    log('選擇裝置:'+(device.name||device.id),'ok');
+    server=await device.gatt.connect();
+    const svc=await server.getPrimaryService(u.svc);
+    log('取得 service','ok');
+    chars.ssid=await svc.getCharacteristic(u.ssid);
+    chars.pass=await svc.getCharacteristic(u.pass);
+    chars.ctrl=await svc.getCharacteristic(u.ctrl);
+    chars.stat=await svc.getCharacteristic(u.stat);
+    log('取得 SSID/PASS/CTRL/STATUS','ok');
+    try{ chars.ip=await svc.getCharacteristic(u.ip);
+         await chars.ip.startNotifications();
+         chars.ip.addEventListener('characteristicvaluechanged',onIp);
+         log('取得 IP characteristic + 訂閱','ok');
+    }catch(e){ chars.ip=null; log('無 IP characteristic(韌體未實作?可手動輸入 IP)','warn'); }
+    await chars.stat.startNotifications();
+    chars.stat.addEventListener('characteristicvaluechanged',onStatus);
+    log('已訂閱 STATUS notify','ok');
+    try{ handleStatus((await chars.stat.readValue()).getUint8(0)); }catch(e){}
+    setConnected(true);
+    $('devInfo').innerHTML='已連線:<code>'+(device.name||device.id)+'</code>';
+    log('就緒 — 可送出 Wi-Fi 憑證','ok');
+  }catch(e){
+    if(e.name==='NotFoundError'){log('已取消 / 找不到裝置','warn');}
+    else{log('連線失敗:'+e.message,'err');}
+  }
+}
+function onDisconnected(){
+  log('裝置已斷線','warn');setConnected(false);setStatus(0);$('ip').textContent='';chars={};
+  $('devInfo').innerHTML='廣播名稱以 <code>Ameba_</code> 開頭 · 需 Chrome / Edge + localhost 或 https';
+}
+function disconnect(){ if(device&&device.gatt.connected)device.gatt.disconnect(); }
+
+function onStatus(e){ handleStatus(e.target.value.getUint8(0)); }
+function handleStatus(code){
+  setStatus(code);
+  const names={0:'IDLE',1:'CONNECTING',2:'CONNECTED',3:'FAIL',4:'WRONG_PASSWORD'};
+  log('◀ STATUS 0x'+pad(code.toString(16))+'  '+(names[code]||'?'),'rx');
+  if(code===2){ $('ip').textContent='✓ 已取得 IP — RTSP 上線';
+    if(chars.ip){ chars.ip.readValue().then(v=>setIp(new TextDecoder().decode(v))).catch(()=>{}); } }
+  else { $('ip').textContent=''; }
+}
+function onIp(e){ setIp(new TextDecoder().decode(e.target.value)); }
+function setIp(s){
+  s=(s||'').replace(/\0+$/,'').trim();
+  if(!s)return;
+  $('devip').value=s; refreshRtsp();
+  log('◀ IP '+s,'rx');
+  $('ip').textContent='✓ '+s+' — RTSP rtsp://'+s+':554';
+}
+
+const enc=new TextEncoder();
+async function writeChar(ch,data,label){
+  if(ch.writeValueWithResponse)await ch.writeValueWithResponse(data); else await ch.writeValue(data);
+  log('▶ 寫入 '+label+'  ('+data.byteLength+' bytes)','tx');
+}
+async function provision(){
+  const ssid=$('ssid').value,pass=$('pass').value;
+  if(!ssid){log('SSID 不可為空','err');$('ssid').focus();return;}
+  if(enc.encode(ssid).length>32){log('SSID 超過 32 bytes','err');return;}
+  if(enc.encode(pass).length>64){log('密碼超過 64 bytes','err');return;}
+  try{
+    $('btnProvision').disabled=true;
+    log('── 開始配網 ─────────────','i');
+    await writeChar(chars.ssid,enc.encode(ssid),'SSID="'+ssid+'"');
+    await writeChar(chars.pass,enc.encode(pass),'PASS='+(pass?('•'.repeat(pass.length)):'(空/開放)'));
+    await writeChar(chars.ctrl,Uint8Array.of(0x01),'CTRL=0x01 (connect)');
+    log('已送出,等待 STATUS 回報…','i');
+  }catch(e){log('寫入失敗:'+e.message,'err');}
+  finally{$('btnProvision').disabled=!(device&&device.gatt.connected);}
+}
+
+/* hls preview */
+let hls=null;
+function playHls(){
+  const v=$('video'),url=$('hlsurl').value.trim();
+  stopHls();
+  if(hls===false||(window.Hls&&Hls.isSupported())){
+    hls=new Hls({liveSyncDuration:2,liveMaxLatencyDuration:5});
+    hls.on(Hls.Events.ERROR,(ev,d)=>{ if(d.fatal){$('vstat').textContent='HLS 錯誤:'+d.details+'(確認 ffmpeg 有在跑、URL 正確)';} });
+    hls.loadSource(url);hls.attachMedia(v);v.play().catch(()=>{});
+    $('vstat').textContent='載入中… '+url;
+  }else if(v.canPlayType('application/vnd.apple.mpegurl')){
+    v.src=url;v.play().catch(()=>{});$('vstat').textContent='原生 HLS 播放中(Safari)';
+  }else{$('vstat').textContent='此瀏覽器無法播 HLS。';}
+}
+function stopHls(){ if(hls&&hls.destroy){hls.destroy();} hls=null; const v=$('video'); v.removeAttribute('src'); v.load&&v.load(); }
+$('btnPlay').onclick=playHls;
+$('btnStop').onclick=()=>{stopHls();$('vstat').textContent='已停止。';};
+
+document.querySelectorAll('.copy[data-copy]').forEach(b=>{
+  b.onclick=async()=>{ const t=$(b.dataset.copy.slice(1)).textContent;
+    try{await navigator.clipboard.writeText(t);const o=b.textContent;b.textContent='已複製';setTimeout(()=>b.textContent=o,1200);}catch(e){} };
+});
+
+$('btnConnect').onclick=connect;$('btnDisconnect').onclick=disconnect;$('btnProvision').onclick=provision;
+$('pwToggle').onclick=()=>{const p=$('pass'),sh=p.type==='password';p.type=sh?'text':'password';$('pwToggle').textContent=sh?'隱藏':'顯示';};
+$('ssid').addEventListener('keydown',e=>{if(e.key==='Enter')$('pass').focus()});
+$('pass').addEventListener('keydown',e=>{if(e.key==='Enter'&&!$('btnProvision').disabled)provision()});
+
+envCheck();setStatus(0);refreshRtsp();
+log('AMB82 BLE 配網測試台 就緒','ok');
+log('1) 連線  2) SSID/密碼  3) 送出  4) STATUS → 取得 IP → RTSP 預覽','i');
+</script>
+</body>
+</html>

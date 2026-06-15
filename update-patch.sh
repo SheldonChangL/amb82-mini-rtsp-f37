@@ -9,6 +9,11 @@ PATCH="amb82-mini-f37-rtsp.patch"
 
 # 1. 從 SDK 目前未 commit 的改動產生 patch
 cd "$SDK"
+# intent-to-add 新增的原始碼檔（排除 build 產物），讓 git diff 也含新檔
+NEWFILES=$(git ls-files --others --exclude-standard -- project component | grep -v '/build/' || true)
+if [ -n "$NEWFILES" ]; then
+  echo "$NEWFILES" | xargs git add -N
+fi
 git diff > "$REPO/$PATCH"
 echo "已更新 $PATCH（$(grep -c '^diff' "$REPO/$PATCH") 個檔有改動）"
 
