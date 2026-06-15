@@ -1,0 +1,207 @@
+diff --git a/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/mmf2_video_example_face_rtsp_init.c b/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/mmf2_video_example_face_rtsp_init.c
+index 855dab6..8608322 100755
+--- a/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/mmf2_video_example_face_rtsp_init.c
++++ b/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/mmf2_video_example_face_rtsp_init.c
+@@ -15,6 +15,7 @@
+ 
+ #include "model_mobilefacenet.h"
+ #include "model_scrfd.h"
++#include "office_event.h"	// office presence: UDP broadcast of recognition state
+ 
+ #include "hal_video.h"
+ #include "hal_isp.h"
+@@ -172,6 +173,8 @@ static void face_draw_object(void *p, void *img_param)
+ 		return;
+ 	}
+ 
++	office_event_report(fdraw);	// broadcast presence/recognition to host daemon
++
+ 	int im_h = RTSP_HEIGHT;
+ 	int im_w = RTSP_WIDTH;
+ 
+@@ -226,6 +229,7 @@ void mmf2_video_example_face_rtsp_init(void)
+ {
+ 	USE_FACEDET_MODEL;
+ 	USE_FACENET_MODEL;
++	office_event_init();	// open UDP broadcast socket for office presence events
+ #if (USE_UPDATED_VIDEO_HEAP == 0)
+ 	int voe_heap_size = video_voe_presetting(V1_ENA, RTSP_WIDTH, RTSP_HEIGHT, RTSP_BPS, 0,
+ 						0, 0, 0, 0, 0,
+diff --git a/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/office_event.c b/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/office_event.c
+new file mode 100644
+index 0000000..2e3b6fc
+--- /dev/null
++++ b/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/office_event.c
+@@ -0,0 +1,138 @@
++/*
++ * office_event.c — broadcast face-recognition state over UDP for the office
++ * presence/lock system. Host-side daemon (tools/office_daemon.py) consumes it.
++ *
++ * Packet: UDP broadcast 255.255.255.255:48555, JSON, on-change + ~1s heartbeat:
++ *   {"dev":"amb82-office","ts":<ms>,"faces":<n>,"known":["name",...],"unknown":<n>}
++ */
++#include "FreeRTOS.h"
++#include "task.h"
++#include <platform_stdlib.h>
++#include <string.h>
++#include "lwip/sockets.h"
++#include "lwip/netif.h"
++#include "office_event.h"
++
++#define OFFICE_EVENT_PORT      48555
++#define OFFICE_HEARTBEAT_MS    1000   /* resend at least this often */
++#define OFFICE_MIN_INTERVAL_MS 250    /* throttle: don't send faster than this */
++#define OFFICE_JSON_MAX        512
++
++static int      s_sock = -1;
++static uint32_t s_last_send_ms = 0;
++static char     s_last_payload[OFFICE_JSON_MAX] = {0};
++
++static uint32_t now_ms(void)
++{
++	return (uint32_t)(xTaskGetTickCount() * portTICK_RATE_MS);
++}
++
++void office_event_init(void)
++{
++	int opt = 1;
++	struct sockaddr_in local;
++
++	if (s_sock >= 0) {
++		return;
++	}
++	s_sock = socket(AF_INET, SOCK_DGRAM, 0);
++	if (s_sock < 0) {
++		printf("[OFFICE] udp socket create fail\r\n");
++		return;
++	}
++	/* allow broadcast */
++	setsockopt(s_sock, SOL_SOCKET, SO_BROADCAST, &opt, sizeof(opt));
++
++	/* bind to an ephemeral local port so we can also receive commands later */
++	memset(&local, 0, sizeof(local));
++	local.sin_family = AF_INET;
++	local.sin_addr.s_addr = INADDR_ANY;
++	local.sin_port = htons(OFFICE_EVENT_PORT + 1); /* 48556 for inbound cmds */
++	bind(s_sock, (struct sockaddr *)&local, sizeof(local));
++
++	printf("[OFFICE] event emitter ready (udp bcast :%d)\r\n", OFFICE_EVENT_PORT);
++}
++
++/* Append a JSON-escaped string (only handles the chars a face name realistically
++ * contains; quotes/backslashes are escaped, control chars dropped). */
++static int append_escaped(char *dst, int cap, const char *s)
++{
++	int n = 0;
++	if (!s) {
++		return 0;
++	}
++	for (; *s && n < cap - 2; s++) {
++		unsigned char c = (unsigned char)*s;
++		if (c == '"' || c == '\\') {
++			dst[n++] = '\\';
++			dst[n++] = c;
++		} else if (c >= 0x20) {
++			dst[n++] = c;
++		}
++	}
++	dst[n] = '\0';
++	return n;
++}
++
++void office_event_report(frc_draw_t *fdraw)
++{
++	char json[OFFICE_JSON_MAX];
++	char names[OFFICE_JSON_MAX / 2];
++	int faces = 0, unknown = 0, known = 0;
++	int nlen = 0, i;
++	uint32_t t;
++	struct sockaddr_in to;
++
++	if (s_sock < 0) {
++		return;
++	}
++
++	names[0] = '\0';
++	if (fdraw && fdraw->obj_cnt > 0) {
++		faces = fdraw->obj_cnt;
++		for (i = 0; i < fdraw->obj_cnt && i < MAX_FRC_REG_NUM; i++) {
++			const char *nm = fdraw->obj_name[i];
++			if (!nm || !strcmp(nm, "unknown")) {
++				unknown++;
++				continue;
++			}
++			/* recognized identity -> add to "known" array */
++			if (known > 0 && nlen < (int)sizeof(names) - 2) {
++				names[nlen++] = ',';
++			}
++			if (nlen < (int)sizeof(names) - 2) {
++				names[nlen++] = '"';
++			}
++			nlen += append_escaped(names + nlen, (int)sizeof(names) - nlen, nm);
++			if (nlen < (int)sizeof(names) - 2) {
++				names[nlen++] = '"';
++			}
++			names[nlen] = '\0';
++			known++;
++		}
++	}
++
++	t = now_ms();
++	snprintf(json, sizeof(json),
++			 "{\"dev\":\"amb82-office\",\"ts\":%u,\"faces\":%d,\"known\":[%s],\"unknown\":%d}",
++			 (unsigned)t, faces, names, unknown);
++
++	/* send when state changed, or on heartbeat; always honor the min interval */
++	if ((uint32_t)(t - s_last_send_ms) < OFFICE_MIN_INTERVAL_MS) {
++		return;
++	}
++	if (!strcmp(json, s_last_payload) && (uint32_t)(t - s_last_send_ms) < OFFICE_HEARTBEAT_MS) {
++		return;
++	}
++
++	memset(&to, 0, sizeof(to));
++	to.sin_family = AF_INET;
++	to.sin_port = htons(OFFICE_EVENT_PORT);
++	to.sin_addr.s_addr = INADDR_BROADCAST; /* 255.255.255.255 */
++
++	sendto(s_sock, json, strlen(json), 0, (struct sockaddr *)&to, sizeof(to));
++
++	s_last_send_ms = t;
++	strncpy(s_last_payload, json, sizeof(s_last_payload) - 1);
++	s_last_payload[sizeof(s_last_payload) - 1] = '\0';
++}
+diff --git a/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/office_event.h b/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/office_event.h
+new file mode 100644
+index 0000000..6b1165f
+--- /dev/null
++++ b/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/office_event.h
+@@ -0,0 +1,28 @@
++/*
++ * office_event.h — AMB82-mini "office" presence event emitter.
++ *
++ * Broadcasts face-recognition state over UDP so a host (Mac/Linux) daemon can
++ * lock/unlock, log attendance, alert on strangers, etc. Pure application code.
++ */
++#ifndef OFFICE_EVENT_H
++#define OFFICE_EVENT_H
++
++#include "module_facerecog.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* Create the UDP broadcast socket. Safe to call once at example init. */
++void office_event_init(void);
++
++/* Report the current recognition result. Call from the facerecog draw callback.
++ * Broadcasts {"dev","ts","faces","known":[...],"unknown"} to 255.255.255.255:48555,
++ * rate-limited (on-change + heartbeat). No-op until office_event_init() succeeds. */
++void office_event_report(frc_draw_t *fdraw);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /* OFFICE_EVENT_H */

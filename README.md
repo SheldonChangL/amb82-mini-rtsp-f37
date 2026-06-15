@@ -10,6 +10,7 @@
 | 主題 | 說明 |
 |------|------|
 | [docs/f37-rtsp.md](docs/f37-rtsp.md) | **核心**：macOS 原生 build、F37 sensor RTSP 無畫面的根因與修正、build/燒錄/看影像、踩雷整理 |
+| [docs/office.md](docs/office.md) | **Office 應用**：人臉辨識 → 鎖定/解鎖(Linux 真解鎖 / macOS presence-hold) + 在場自動化(出勤/番茄鐘/陌生臉/偷看…)；薄韌體 UDP + Python daemon |
 | [docs/ble-provisioning.md](docs/ble-provisioning.md) | **BLE 配網（預設）**：開機無 Wi-Fi → 廣播 `Ameba_AMB82` → 經 BLE 下發帳密；含 Python 測試工具 |
 | [docs/ble-provision-protocol.md](docs/ble-provision-protocol.md) | BLE 配網的完整 GATT 協定（UUID、寫入順序、狀態碼、Web Bluetooth 範例） |
 | [docs/qr-provisioning.md](docs/qr-provisioning.md) | QR 掃碼配網 + 狀態 LED（備用；因定焦鏡頭近距離難對焦已退為次選） |
@@ -28,6 +29,8 @@
 
 - [`update-patch.sh`](update-patch.sh)：從 SDK 工作目錄重新產生 F37 patch 並 push（只收錄 F37 相關檔，不混入其他功能）
 - 工具：[`tools/ble_wifi_tester.py`](tools/ble_wifi_tester.py)（BLE 配網 + RTSP 預覽桌面程式）
+- 工具：[`tools/office_daemon.py`](tools/office_daemon.py)（Office 人臉在場 → 鎖定/解鎖 + 自動化，Mac/Linux，純 stdlib）
+- patch：[`patches/office-facelock.patch`](patches/office-facelock.patch)（office 韌體：UDP 事件廣播 + face 範例掛勾）
 
 ## 授權
 
