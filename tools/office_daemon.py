@@ -17,16 +17,26 @@ AMB82-mini · Office Presence Daemon (跨平台 macOS + Linux,純 stdlib)
     {"cmd":"enroll","name":"<n>"} 或 {"cmd":"led","state":"green|blue|red|off"}
 
 ----------------------------------------------------------------------
+連線模式(二選一):
+  - 預設 UDP 模式:直接綁 UDP 0.0.0.0:48555 收板子廣播(純 stdlib,免裝套件)。
+  - MQTT 模式(--mqtt HOST):改向 MQTT broker 訂閱在席與通知 topic。適合
+    「板子在區網廣播 → 常開 Linux 機跑 udp_mqtt_bridge.py 橋接到 MQTT →
+    多台(Linux/Mac)各自訂閱、各自鎖/解鎖自己」的架構。MQTT 模式才需要
+    `pip install paho-mqtt`(延遲匯入;UDP-only 使用者完全不需要)。
+
+----------------------------------------------------------------------
 相依套件(只用 Python stdlib,其餘為「選用」的外部指令):
   - Python 3.9+
+  - paho-mqtt         (選用)僅 MQTT 模式(--mqtt)才需要;延遲匯入
   - ffmpeg            (選用)抓 RTSP 快照;沒有就略過快照,不會崩潰
   - macOS:           pmset / osascript / caffeinate(系統內建)
   - Linux:           loginctl(systemd 登入工作階段)、notify-send(桌面通知)
 
 執行:
-    python3 office_daemon.py                # 正式執行(會真的鎖機器!)
-    python3 office_daemon.py --dry-run      # 只記錄「打算做什麼」,不真的執行
-    python3 office_daemon.py --owner alice  # 覆寫 OWNER_NAMES
+    python3 office_daemon.py                       # UDP 模式,正式執行(會真的鎖機器!)
+    python3 office_daemon.py --dry-run             # 只記錄「打算做什麼」,不真的執行
+    python3 office_daemon.py --owner alice         # 覆寫 OWNER_NAMES
+    python3 office_daemon.py --mqtt 192.168.1.10   # MQTT 模式(向該 broker 訂閱)
 
 ⚠️ macOS 解鎖限制(務必理解):
   第三方程式「無法」繞過 macOS 登入密碼自動解鎖。本程式在「主人回來」時只能
@@ -522,6 +532,184 @@ def _as_str_list(v):
 
 
 # ======================================================================
+# MQTT I/O —— CameraLink 的 MQTT 替身(只在 --mqtt 時啟用)
+#   公開介面與 CameraLink 完全相同,主迴圈無需改動。
+#   paho-mqtt 為「選用」相依,僅 MQTT 模式才需要 → 延遲匯入(lazy import)。
+# ======================================================================
+import queue  # stdlib;MqttLink 內部事件佇列用
+
+
+class MqttLink:
+    """以 MQTT 取代 UDP:訂閱在席 topic 與通知 topic,publish 指令 topic。
+
+    對外介面與 CameraLink 一致:open / recv_event / get_ip /
+    seconds_since_packet / send_cmd / enroll / set_led / close。
+    板子韌體不變;UDP→MQTT 由 udp_mqtt_bridge.py 在常開 Linux 機上做橋接。
+    """
+
+    def __init__(self, broker: str, port: int = 1883,
+                 presence_topic: str = "amb82/office/presence",
+                 notify_base: str = "amb82/notify",
+                 cmd_topic: str = "amb82/office/cmd"):
+        self.broker = broker
+        self.port = port
+        self.presence_topic = presence_topic
+        self.notify_base = notify_base
+        self.cmd_topic = cmd_topic
+
+        self.camera_ip = None
+        self.last_packet_ts = 0.0
+        self._lock = threading.Lock()
+        self._q = queue.Queue()         # 正規化後的在席事件佇列(thread-safe)
+        self._client = None
+        self._mqtt = None               # lazy-imported paho module
+
+        # 本機平台 → 通知子 topic(mac / linux)
+        sysname = platform.system()
+        self._platform = "mac" if sysname == "Darwin" else (
+            "linux" if sysname == "Linux" else sysname.lower())
+        self._notify_topic_plat = f"{notify_base}/{self._platform}"
+
+    def open(self):
+        # 延遲匯入:UDP-only 使用者不需安裝 paho-mqtt
+        try:
+            import paho.mqtt.client as mqtt
+        except ImportError as e:
+            log("MQTT mode requires paho-mqtt. Install it with: "
+                "pip install paho-mqtt", "ERROR")
+            raise
+        self._mqtt = mqtt
+        # 相容 paho v1 與 v2 callback API
+        try:
+            c = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION1)
+        except (AttributeError, TypeError):
+            c = mqtt.Client()
+        c.on_connect = self._on_connect
+        c.on_disconnect = self._on_disconnect
+        c.on_message = self._on_message
+        c.reconnect_delay_set(min_delay=1, max_delay=30)
+        self._client = c
+        try:
+            c.connect(self.broker, self.port, keepalive=60)
+        except Exception as e:
+            log(f"MQTT initial connect failed ({e}); will retry in background", "WARN")
+            try:
+                c.connect_async(self.broker, self.port, keepalive=60)
+            except Exception:
+                pass
+        c.loop_start()
+        log(f"MQTT mode: broker {self.broker}:{self.port}, "
+            f"presence='{self.presence_topic}', "
+            f"notify='{self.notify_base}'(+/{self._platform})")
+
+    def _on_connect(self, client, userdata, flags, rc, *args):
+        if rc == 0:
+            log(f"MQTT connected to {self.broker}:{self.port}")
+            client.subscribe(self.presence_topic, qos=0)
+            client.subscribe(self.notify_base, qos=0)
+            client.subscribe(self._notify_topic_plat, qos=0)
+            log(f"subscribed: {self.presence_topic}, {self.notify_base}, "
+                f"{self._notify_topic_plat}")
+        else:
+            log(f"MQTT connect failed rc={rc}", "WARN")
+
+    def _on_disconnect(self, client, userdata, rc, *args):
+        if rc != 0:
+            log(f"MQTT disconnected (rc={rc}); auto-reconnecting…", "WARN")
+
+    def _on_message(self, client, userdata, msg):
+        try:
+            topic = msg.topic
+            if topic == self.presence_topic:
+                self._handle_presence(msg.payload)
+            elif topic == self.notify_base or topic.startswith(self.notify_base + "/"):
+                self._handle_notify(msg.payload)
+        except Exception as e:
+            log(f"on_message error (ignored): {e}", "WARN")
+
+    def _handle_presence(self, payload: bytes):
+        try:
+            evt = json.loads(payload.decode("utf-8", "replace"))
+            if not isinstance(evt, dict):
+                return
+        except Exception:
+            log("malformed presence MQTT payload, ignored", "WARN")
+            return
+        # dev 過濾(與 CameraLink 一致)
+        if CONFIG["DEV_FILTER"] and evt.get("dev") != CONFIG["DEV_FILTER"]:
+            return
+        ip = evt.get("ip")
+        with self._lock:
+            if ip and self.camera_ip != ip:
+                self.camera_ip = ip
+                log(f"camera IP learned (via MQTT): {ip}")
+            self.last_packet_ts = time.monotonic()
+        self._q.put({
+            "faces": _as_int(evt.get("faces"), 0),
+            "known": _as_str_list(evt.get("known")),
+            "unknown": _as_int(evt.get("unknown"), 0),
+            "ts": _as_int(evt.get("ts"), 0),
+        })
+
+    def _handle_notify(self, payload: bytes):
+        text = payload.decode("utf-8", "replace")
+        # 若是 JSON 且帶 "msg" 欄位 → 取其值;否則直接用原字串
+        try:
+            obj = json.loads(text)
+            if isinstance(obj, dict) and "msg" in obj:
+                text = str(obj["msg"])
+        except Exception:
+            pass
+        notify(text)
+
+    def recv_event(self):
+        """阻塞至多 ~1 秒;回傳正規化 dict 或 None(逾時)。"""
+        try:
+            return self._q.get(timeout=1.0)
+        except queue.Empty:
+            return None
+
+    def get_ip(self):
+        with self._lock:
+            return self.camera_ip
+
+    def seconds_since_packet(self):
+        with self._lock:
+            if not self.last_packet_ts:
+                return float("inf")
+            return time.monotonic() - self.last_packet_ts
+
+    def send_cmd(self, payload: dict, dry_run: bool):
+        if dry_run:
+            log(f"[DRY-RUN] would publish cmd to {self.cmd_topic}: {payload}")
+            return
+        if not self._client:
+            log(f"send_cmd skipped (MQTT not connected): {payload}", "WARN")
+            return
+        try:
+            raw = json.dumps(payload)
+            self._client.publish(self.cmd_topic, raw, qos=0, retain=False)
+            log(f"cmd → MQTT {self.cmd_topic}: {payload}")
+        except Exception as e:
+            log(f"send_cmd failed: {e}", "WARN")
+
+    # 便利包裝:登錄 / LED(與 CameraLink 相同)
+    def enroll(self, name: str, dry_run: bool):
+        self.send_cmd({"cmd": "enroll", "name": name}, dry_run)
+
+    def set_led(self, state: str, dry_run: bool):
+        self.send_cmd({"cmd": "led", "state": state}, dry_run)
+
+    def close(self):
+        try:
+            if self._client:
+                self._client.loop_stop()
+                self._client.disconnect()
+        except Exception:
+            pass
+
+
+# ======================================================================
 # Attendance log —— CSV + 每日在席分鐘
 # ======================================================================
 class Attendance:
@@ -892,6 +1080,16 @@ def parse_args(argv):
                     help="覆寫 LISTEN_PORT")
     ap.add_argument("--unlock-debounce", type=float, default=None,
                     help="解鎖去抖秒數(越小越快解鎖,預設 0.6)")
+    # --- MQTT 模式(additive;不加 --mqtt 仍是預設的 UDP 模式)---
+    ap.add_argument("--mqtt", default=None, metavar="HOST",
+                    help="啟用 MQTT 模式並指定 broker host(需 pip install paho-mqtt);"
+                         "不加則維持預設 UDP 廣播模式")
+    ap.add_argument("--mqtt-port", type=int, default=1883,
+                    help="MQTT broker port(預設 1883)")
+    ap.add_argument("--mqtt-topic", default="amb82/office/presence",
+                    help="在席事件 topic(預設 amb82/office/presence)")
+    ap.add_argument("--notify-topic", default="amb82/notify",
+                    help="桌面通知 topic 前綴(預設 amb82/notify;另訂閱 /mac 或 /linux)")
     return ap.parse_args(argv)
 
 
@@ -923,12 +1121,22 @@ def main(argv=None):
     _install_signal_handlers()
 
     ctrl = make_controller(dry)
-    link = CameraLink()
-    try:
-        link.open()
-    except Exception as e:
-        log(f"FATAL: cannot bind UDP {CONFIG['LISTEN_PORT']}: {e}", "ERROR")
-        return 1
+    if args.mqtt:
+        log(f"link mode: MQTT (broker {args.mqtt}:{args.mqtt_port})")
+        link = MqttLink(args.mqtt, args.mqtt_port, args.mqtt_topic, args.notify_topic)
+        try:
+            link.open()
+        except Exception as e:
+            log(f"FATAL: cannot start MQTT link: {e}", "ERROR")
+            return 1
+    else:
+        log("link mode: UDP broadcast (default)")
+        link = CameraLink()
+        try:
+            link.open()
+        except Exception as e:
+            log(f"FATAL: cannot bind UDP {CONFIG['LISTEN_PORT']}: {e}", "ERROR")
+            return 1
 
     engine = PresenceEngine(link, ctrl, dry, armed=armed)
 
