@@ -1,3 +1,25 @@
+diff --git a/component/media/mmfv2/module_vipnn.c b/component/media/mmfv2/module_vipnn.c
+index 43e5a5d..3681eca 100755
+--- a/component/media/mmfv2/module_vipnn.c
++++ b/component/media/mmfv2/module_vipnn.c
+@@ -232,7 +232,7 @@ static int vipnn_handle(void *p, void *input, void *output)
+ 		device_mutex_lock(RT_DEV_LOCK_NN);
+ 		vip_query_network(ctx->network, VIP_NETWORK_PROP_PROFILING, &inf_info);
+ 		device_mutex_unlock(RT_DEV_LOCK_NN);
+-		dprintf(LOG_MSG, "%s tick[%ld]\n\r", ctx->params.model->name, inf_info.inference_time);
++		dprintf(LOG_INF, "%s tick[%ld]\n\r", ctx->params.model->name, inf_info.inference_time); // office: was LOG_MSG, demoted to silence per-inference spam
+ 		dprintf(LOG_INF, "cycle[%ld]\n\r", inf_info.total_cycle);
+ 
+ 		// always destroy vip input buffer after inference
+@@ -330,7 +330,7 @@ static int vipnn_handle(void *p, void *input, void *output)
+ 	ctx->measure.count++;
+ 	if (ctx->measure.count % 16 == 0) {
+ 		float nn_fps = (float)ctx->measure.count * 1000.0 / (float)(xTaskGetTickCount() - ctx->measure.time0);
+-		dprintf(LOG_MSG, ">>> %s FPS = %0.2f\n\r", ctx->params.model->name, nn_fps);
++		dprintf(LOG_INF, ">>> %s FPS = %0.2f\n\r", ctx->params.model->name, nn_fps); // office: was LOG_MSG, demoted to silence FPS spam
+ 		dprintf(LOG_INF, ">>> %s count %d tick %d\n\r", ctx->params.model->name, nn_fps, ctx->measure.count, xTaskGetTickCount() - ctx->measure.time0);
+ 	}
+ 	vipnn_mark();
 diff --git a/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/mmf2_video_example_face_rtsp_init.c b/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/mmf2_video_example_face_rtsp_init.c
 index 855dab6..8608322 100755
 --- a/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/mmf2_video_example_face_rtsp_init.c

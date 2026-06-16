@@ -28,6 +28,10 @@ import sys
 import asyncio
 import subprocess
 import shutil
+import json
+import socket
+import threading
+import queue
 
 try:
     from PySide6.QtCore import Qt, QUrl, QTimer
@@ -110,6 +114,12 @@ class MainWindow(QWidget):
         self.setStyleSheet(QSS)
         self._set_status(0)
         self._set_connected(False)
+        # office presence: listen for the firmware's UDP broadcast on :48555
+        self._office_q = queue.Queue()
+        self._start_office_listener()
+        self._otimer = QTimer(self)
+        self._otimer.timeout.connect(self._drain_office)
+        self._otimer.start(200)
 
     # ---------- UI ----------
     def _card(self, title):
@@ -176,6 +186,23 @@ class MainWindow(QWidget):
         srow.addWidget(self.led); srow.addLayout(st, 1)
         sv.addLayout(srow)
         left.addWidget(sc)
+
+        # --- office presence card (UDP 48555 from office firmware) ---
+        oc, ov = self._card("Office 在場事件  ·  PRESENCE")
+        self.lbl_ostate = QLabel("等待 UDP 事件…(板子需跑 office 韌體)")
+        self.lbl_ostate.setObjectName("stext")
+        ov.addWidget(self.lbl_ostate)
+        og = QGridLayout(); og.setSpacing(8)
+        self.lbl_faces = QLabel("—")
+        self.lbl_known = QLabel("—"); self.lbl_known.setObjectName("ip")
+        self.lbl_unknown = QLabel("—")
+        for r, (cap, w) in enumerate([("臉數 faces", self.lbl_faces),
+                                      ("已辨識 known", self.lbl_known),
+                                      ("陌生 unknown", self.lbl_unknown)]):
+            c = QLabel(cap); c.setObjectName("code")
+            og.addWidget(c, r, 0); og.addWidget(w, r, 1)
+        ov.addLayout(og)
+        left.addWidget(oc)
         left.addStretch(1)
 
         # --- RTSP card (right) ---
@@ -343,6 +370,65 @@ class MainWindow(QWidget):
         self.lbl_ip.setText(f"✓ {ip}  —  rtsp://{ip}:554")
         self.lbl_url.setText(f"rtsp://{ip}:554")
         self.log(f"◀ IP {ip}", "rx")
+
+    # ---------- office presence (UDP 48555) ----------
+    def _start_office_listener(self, port=48555):
+        def run():
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+                except Exception:
+                    pass
+                s.bind(("", port))
+            except Exception as e:
+                self._office_q.put(("err", str(e)))
+                return
+            while True:
+                try:
+                    data, addr = s.recvfrom(2048)
+                    self._office_q.put(("ev", addr[0], data))
+                except Exception:
+                    pass
+        threading.Thread(target=run, daemon=True).start()
+
+    def _drain_office(self):
+        last = None
+        while True:
+            try:
+                item = self._office_q.get_nowait()
+            except queue.Empty:
+                break
+            if item[0] == "err":
+                self.lbl_ostate.setText(f"UDP 監聽失敗:{item[1]}（48555 是否被佔用？）")
+                continue
+            last = item
+        if not last:
+            return
+        _, ip, data = last
+        try:
+            ev = json.loads(data.decode("utf-8", "replace"))
+        except Exception:
+            return
+        if ev.get("dev") != "amb82-office":
+            return
+        faces = ev.get("faces", 0)
+        known = ev.get("known", []) or []
+        unknown = ev.get("unknown", 0)
+        self.lbl_faces.setText(str(faces))
+        self.lbl_known.setText("、".join(known) if known else "—")
+        self.lbl_unknown.setText(str(unknown))
+        if known:
+            self.lbl_ostate.setText(f"✓ 辨識到:{'、'.join(known)}")
+        elif faces:
+            self.lbl_ostate.setText("有臉但未辨識(unknown)")
+        else:
+            self.lbl_ostate.setText("無人")
+        # learn camera IP from the broadcast -> auto-fill RTSP url (BLE IP wins if set)
+        if ip and not self.ip:
+            self.ip = ip
+            self.lbl_url.setText(f"rtsp://{ip}:554")
 
     # ---------- RTSP ----------
     def _url(self):

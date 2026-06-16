@@ -66,6 +66,19 @@ python3 tools/office_daemon.py --owner sheldon --dry-run # 只印動作、不真
 ```
 
 - 純 Python 標準庫，免裝 pip 套件。快照功能需要 `ffmpeg`（沒裝會略過、不會掛）。
+
+### 視覺化測試（GUI）
+
+`tools/ble_wifi_tester.py`（PySide6 GUI）已內建 **Office 在場事件** 卡片：即時顯示 UDP 廣播的 `臉數/已辨識/陌生` + 狀態，並自動從廣播學到板子 IP 帶進 RTSP URL —— 搭配內建 RTSP 預覽，可同時看臉框(綠=已辨識/紅=unknown)與辨識結果，最適合一邊註冊臉一邊驗證。
+
+```bash
+python3 -m pip install PySide6 qasync bleak
+python3 tools/ble_wifi_tester.py     # 看左下「Office 在場事件」卡 + 右側 RTSP 預覽
+```
+
+> GUI 與 `office_daemon.py` 都綁 UDP 48555 → 一次只能跑一個。GUI 用來「看」、daemon 用來「真的鎖」。
+
+> 韌體已把 `SCRFD tick / FPS` 的 per-inference debug 從 `LOG_MSG` 降到 `LOG_INF`（預設不顯示），console 不再洗版。
 - Linux 桌面通知需 `notify-send`。
 - 所有可調參數 + 每個功能開關在檔案開頭的 `CONFIG` dict（繁中註解）。
 
