@@ -67,6 +67,7 @@ CONFIG = {
     "OWNER_NAMES": ["sheldon"],     # 視為「主人」的登錄名字(任一出現即在席)
     "ABSENCE_LOCK_SEC": 20,         # 主人消失多久才判定「離開」並鎖機(去抖)
     "PRESENCE_DEBOUNCE_SEC": 2,     # 主人需連續出現多久才判定「到達」(去抖)
+    "RELOCK_GRACE_SEC": 8,          # 剛解鎖後這段時間內不准再鎖(避免回來瞬間又被鎖)
 
     # --- 網路 ---
     "LISTEN_PORT": 48555,           # 接收韌體廣播的 UDP port
@@ -592,16 +593,21 @@ class Attendance:
 # Presence engine —— hysteresis + 所有功能
 # ======================================================================
 class PresenceEngine:
-    def __init__(self, link: CameraLink, ctrl: OSController, dry_run: bool):
+    def __init__(self, link: CameraLink, ctrl: OSController, dry_run: bool, armed: bool = False):
         self.link = link
         self.ctrl = ctrl
         self.dry_run = dry_run
+        self.armed = armed                  # 未 --arm 時:只記錄不真的鎖/解鎖(防鎖死)
         self.att = Attendance(dry_run)
 
         # 在席狀態機
         self.owner_present = False          # 已確認(去抖後)的在席狀態
         self._owner_seen_since = None       # 連續看到主人的起點
         self._owner_gone_since = None       # 連續沒看到主人的起點
+
+        # 螢幕鎖狀態(daemon 自己追蹤,避免重複鎖造成「打不進密碼」的鎖死迴圈)
+        self._screen_locked = False
+        self._last_unlock = 0.0
 
         # 各功能狀態
         self._prev_faces = 0
@@ -677,12 +683,46 @@ class PresenceEngine:
                     now - self._owner_gone_since >= CONFIG["ABSENCE_LOCK_SEC"]):
                 self._on_departed(now)
 
+    # ---- 鎖/解鎖封裝:冪等 + grace + 武裝開關 + DISARM 失效保險 ----
+    def _disarmed_by_file(self) -> bool:
+        try:
+            return os.path.exists(os.path.join(base_dir(), "DISARM"))
+        except Exception:
+            return False
+
+    def _do_lock(self, reason: str):
+        if self._screen_locked:
+            return                                   # 已鎖 → 不重複鎖(關鍵:消除鎖死迴圈)
+        if time.monotonic() - self._last_unlock < CONFIG["RELOCK_GRACE_SEC"]:
+            log(f"[grace 期內,不鎖] {reason}")
+            return
+        if self._disarmed_by_file():
+            log(f"[DISARM 檔存在 → 不鎖] {reason}", "WARN")
+            return
+        self._screen_locked = True
+        if self.armed:
+            log(f"LOCK ({reason})")
+            self.ctrl.lock()
+        else:
+            log(f"[未 --arm → 只記錄] would LOCK ({reason})")
+
+    def _do_unlock(self):
+        self._last_unlock = time.monotonic()
+        was_locked = self._screen_locked
+        self._screen_locked = False
+        if self.armed:
+            if was_locked:
+                log("UNLOCK")
+            self.ctrl.unlock()
+        else:
+            log("[未 --arm → 只記錄] would UNLOCK")
+
     def _on_arrived(self, now: float):
         self.owner_present = True
         log("OWNER ARRIVED → unlock / wake / keep-awake")
         if CONFIG["FEAT_PRESENCE_LOCK"]:
             self.ctrl.keep_awake_on()
-            self.ctrl.unlock()
+            self._do_unlock()
             self.ctrl.wake()
         if CONFIG["FEAT_ATTENDANCE_LOG"]:
             self.att.on_arrived()
@@ -700,7 +740,7 @@ class PresenceEngine:
         self.owner_present = False
         log("OWNER DEPARTED → lock")
         if CONFIG["FEAT_PRESENCE_LOCK"]:
-            self.ctrl.lock()
+            self._do_lock("owner departed")
             self.ctrl.keep_awake_off()
         if CONFIG["FEAT_ATTENDANCE_LOG"]:
             self.att.on_departed()
@@ -714,15 +754,18 @@ class PresenceEngine:
 
     # ---- 2. 陌生人鎖 ----
     def _foreign_face_lock(self, unknown: int, now: float):
-        # 主人不在(已鎖/離開)且有陌生人 → 立即鎖 + 快照 + 通知
-        if not self.owner_present and unknown >= 1:
-            log("FOREIGN FACE while owner away → lock + snapshot + notify", "WARN")
-            if CONFIG["FEAT_PRESENCE_LOCK"]:
-                self.ctrl.lock()
-            snapshot(self.link.get_ip(), "intruder", self.dry_run, subdir="audit")
-            notify("Unknown person at your desk")
-            if CONFIG["PUSH_LED"]:
-                self.link.set_led("red", self.dry_run)
+        # 只在「目前未鎖、主人不在、且有陌生人」時動作一次。
+        # _screen_locked 守門 → 不會每幀(~3Hz)重複鎖,這正是先前把人鎖死的元兇。
+        if self._screen_locked or self.owner_present or unknown < 1:
+            return
+        if not CONFIG["FEAT_PRESENCE_LOCK"]:
+            return
+        log("FOREIGN FACE while owner away → lock + snapshot + notify", "WARN")
+        self._do_lock("foreign face")            # 冪等;鎖一次後 _screen_locked 擋住後續
+        snapshot(self.link.get_ip(), "intruder", self.dry_run, subdir="audit")
+        notify("Unknown person at your desk")
+        if CONFIG["PUSH_LED"]:
+            self.link.set_led("red", self.dry_run)
 
     # ---- 3. 偷看肩膀 ----
     def _shoulder_surfer(self, faces: int, now: float):
@@ -841,6 +884,8 @@ def parse_args(argv):
         description="AMB82-mini office presence daemon")
     ap.add_argument("--dry-run", action="store_true",
                     help="只記錄打算做的動作,不真的鎖/解鎖/快照")
+    ap.add_argument("--arm", action="store_true",
+                    help="真的執行鎖/解鎖(預設關閉以防鎖死;先不加跑看 log 判斷對了再加)")
     ap.add_argument("--owner", action="append", default=None,
                     help="覆寫 OWNER_NAMES(可多次)")
     ap.add_argument("--port", type=int, default=None,
@@ -856,12 +901,17 @@ def main(argv=None):
         CONFIG["LISTEN_PORT"] = args.port
 
     dry = args.dry_run
+    armed = args.arm and not dry
     ensure_dir(base_dir())
     log("=" * 60)
-    log(f"AMB82 Office Daemon starting (dry_run={dry})")
+    log(f"AMB82 Office Daemon starting (dry_run={dry}, armed={armed})")
+    if not armed:
+        log("** 未武裝:只記錄、不會真的鎖/解鎖。確認 log 判斷正確後加 --arm 才會真的鎖 **", "WARN")
+    log(f"失效保險:在 {os.path.join(base_dir(), 'DISARM')} 建一個檔即可即時停止鎖定")
     log(f"owners={CONFIG['OWNER_NAMES']} "
         f"absence_lock={CONFIG['ABSENCE_LOCK_SEC']}s "
-        f"presence_debounce={CONFIG['PRESENCE_DEBOUNCE_SEC']}s")
+        f"presence_debounce={CONFIG['PRESENCE_DEBOUNCE_SEC']}s "
+        f"relock_grace={CONFIG['RELOCK_GRACE_SEC']}s")
     enabled = [k for k, v in CONFIG.items() if k.startswith("FEAT_") and v]
     log(f"features: {', '.join(enabled)}")
     log("=" * 60)
@@ -876,7 +926,7 @@ def main(argv=None):
         log(f"FATAL: cannot bind UDP {CONFIG['LISTEN_PORT']}: {e}", "ERROR")
         return 1
 
-    engine = PresenceEngine(link, ctrl, dry)
+    engine = PresenceEngine(link, ctrl, dry, armed=armed)
 
     last_tick = 0.0
     try:

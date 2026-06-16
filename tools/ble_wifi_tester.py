@@ -276,7 +276,14 @@ class MainWindow(QWidget):
             found = await BleakScanner.discover(timeout=6.0)
         except Exception as e:
             self.log(f"掃描失敗:{e}", "err")
-            self.log("macOS:請到 系統設定→隱私權→藍牙 允許『終端機』", "warn")
+            if sys.platform == "darwin":
+                self.log("macOS:系統設定 → 隱私權與安全性 → 藍牙,允許終端機/Python", "warn")
+            elif sys.platform.startswith("linux"):
+                self.log("Linux:bluetoothctl list 看有無 controller;"
+                         "sudo systemctl enable --now bluetooth;"
+                         "sudo rfkill unblock bluetooth;bluetoothctl power on", "warn")
+            else:
+                self.log("確認本機有可用的藍牙介面", "warn")
             self.btn_scan.setEnabled(True)
             return
         for d in found:
