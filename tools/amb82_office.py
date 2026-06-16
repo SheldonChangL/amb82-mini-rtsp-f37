@@ -270,7 +270,7 @@ class MainWindow(QWidget):
         left.addWidget(cc)
 
         # --- status card ---
-        sc, sv = self._card("配網狀態  ·  STATUS")
+        sc, sv = self._card("裝置狀態  ·  STATUS")
         srow = QHBoxLayout(); srow.setSpacing(16)
         self.led = QLabel(); self.led.setFixedSize(46, 46)
         st = QVBoxLayout(); st.setSpacing(3)
@@ -507,6 +507,7 @@ class MainWindow(QWidget):
 
     def _refresh_lock_status(self):
         """由 _drain_office 觸發:更新在席/螢幕鎖即時狀態 + log 轉變。"""
+        self._update_device_status()          # 由 UDP 存活推算裝置在線/失聯/待命
         present = self.engine.owner_present
         locked = self.engine._screen_locked
         self.lbl_present.setText("在席 ✓ present" if present else "在席 ✗ away")
@@ -549,12 +550,30 @@ class MainWindow(QWidget):
     def _ts(self):
         return time.strftime("%H:%M:%S")
 
-    def _set_status(self, code):
-        name, color, en = STATUS.get(code, ("未知", "#ff5a52", "?"))
+    def _set_status_text(self, name, color, code_str):
         self.lbl_st.setText(name)
-        self.lbl_code.setText(f"STATUS — 0x{code:02x}  {en}")
+        self.lbl_code.setText(f"STATUS — {code_str}")
         self.led.setStyleSheet(
             f"background:{color}; border-radius:23px; border:1px solid rgba(255,255,255,.1);")
+
+    def _set_status(self, code):
+        """BLE 配網狀態(0xA104 notify)。"""
+        name, color, en = STATUS.get(code, ("未知", "#ff5a52", "?"))
+        self._set_status_text(name, color, f"0x{code:02x}  {en}")
+
+    def _update_device_status(self):
+        """配網沒在進行時(BLE 未連線),改用 UDP 封包存活時間反映裝置真實狀態。
+        否則裝置配網後重開進 office 韌體、BLE 已斷,STATUS 卡會永遠卡在「待命」。
+        BLE 連線中時讓配網 STATUS 優先,不覆蓋。"""
+        if self.client is not None:
+            return
+        secs = self.link.seconds_since_packet()
+        if secs == float("inf"):
+            self._set_status_text("待命", "#6f827c", "IDLE")            # 還沒收到任何 UDP
+        elif secs <= CONFIG["PACKET_TIMEOUT_SEC"]:
+            self._set_status_text("運作中", "#39e0a0", "ONLINE")         # 持續廣播 → 裝置在線
+        else:
+            self._set_status_text("失聯", "#ff5a52", f"OFFLINE {int(secs)}s")
 
     def _set_connected(self, on):
         self.btn_conn.setEnabled(not on)
