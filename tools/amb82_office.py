@@ -311,12 +311,9 @@ class MainWindow(QWidget):
         self.video.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.video.setStyleSheet("background:#000;border:1px solid #1c2a27;border-radius:4px;")
         rv.addWidget(self.video, 1)
-        self.player = QMediaPlayer()
-        self.audio = QAudioOutput(); self.audio.setMuted(True)
-        self.player.setAudioOutput(self.audio)
-        self.player.setVideoOutput(self.video)
-        self.player.errorOccurred.connect(
-            lambda e, s: self.log(f"播放器錯誤:{s}(改用 ffplay)", "err") if e else None)
+        self.player = None
+        self.audio = None
+        self._build_player()
 
         urow = QHBoxLayout()
         self.lbl_url = QLabel("rtsp://—:554"); self.lbl_url.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -768,11 +765,29 @@ class MainWindow(QWidget):
     def _url(self):
         return self.lbl_url.text().strip()
 
+    def _build_player(self):
+        """建立(或重建)一顆乾淨的 QMediaPlayer。
+        RTSP 是不可 seek 的 live 串流,斷線後舊的 FFmpeg demuxer 會殘留播放位置
+        → 再播只會吐 'Failed to seek' 而黑屏。每次內嵌播放都換新的一顆,徹底避開。"""
+        old = self.player
+        if old is not None:
+            old.stop()
+            old.setVideoOutput(None)
+            old.setAudioOutput(None)
+            old.deleteLater()
+        self.player = QMediaPlayer()
+        self.audio = QAudioOutput(); self.audio.setMuted(True)
+        self.player.setAudioOutput(self.audio)
+        self.player.setVideoOutput(self.video)
+        self.player.errorOccurred.connect(
+            lambda e, s: self.log(f"播放器錯誤:{s}(改用 ffplay)", "err") if e else None)
+
     def on_play(self):
         url = self._url()
         if "—" in url:
             self.log("還沒有 IP(配網成功後會自動帶入,或手動改 rtsp URL)", "warn"); return
         self.log(f"內嵌播放 {url}", "i")
+        self._build_player()                 # 換新的一顆,清掉斷線殘留的 demuxer 狀態
         self.player.setSource(QUrl(url))
         self.player.play()
 
