@@ -25,12 +25,13 @@
 
 完整步驟見 [docs/f37-rtsp.md](docs/f37-rtsp.md)。
 
-## 維護
+## 桌面應用 / 工具
 
-- [`update-patch.sh`](update-patch.sh)：從 SDK 工作目錄重新產生 F37 patch 並 push（只收錄 F37 相關檔，不混入其他功能）
-- 工具：[`tools/ble_wifi_tester.py`](tools/ble_wifi_tester.py)（BLE 配網 + RTSP 預覽桌面程式）
-- 工具：[`tools/office_daemon.py`](tools/office_daemon.py)（Office 人臉在場 → 鎖定/解鎖 + 自動化，Mac/Linux，純 stdlib）
-- patch：[`patches/office-facelock.patch`](patches/office-facelock.patch)（office 韌體：UDP 事件廣播 + face 範例掛勾）
+- **[`tools/amb82_office.py`](tools/amb82_office.py)** — **完整桌面應用**(PySide6):BLE 配網 + RTSP 預覽 + 在場監看 + **臉部鎖定控制台**(GUI 勾選啟用、調參數、即時狀態、DISARM)。重用 office_daemon 的引擎。**一般使用首選這個。**
+- [`tools/office_daemon.py`](tools/office_daemon.py)：無 GUI 的常駐版(Ubuntu server / 開機自動跑),純 stdlib;與桌面 app 共用同一套 PresenceEngine
+- [`tools/ble_wifi_tester.py`](tools/ble_wifi_tester.py)：早期精簡版(僅 BLE 配網 + RTSP),已被 amb82_office 取代
+- [`update-patch.sh`](update-patch.sh)：重新產生 F37 patch 並 push
+- patch：[`patches/office-facelock.patch`](patches/office-facelock.patch)（office 韌體:UDP 事件廣播 + face 範例掛勾）
 
 ## 授權
 

@@ -67,7 +67,24 @@ python3 tools/office_daemon.py --owner sheldon --arm    # 真的鎖/解鎖（確
 
 - 純 Python 標準庫，免裝 pip 套件。快照功能需要 `ffmpeg`（沒裝會略過、不會掛）。
 
-### 視覺化測試（GUI）
+### 桌面應用(GUI,首選)
+
+`tools/amb82_office.py` 是完整桌面應用:在一個視窗裡 BLE 配網 + RTSP 預覽 + 在場監看 + **臉部鎖定控制台**。不用碰終端機:
+
+```bash
+python3 -m pip install PySide6 qasync bleak
+python3 tools/amb82_office.py
+```
+
+控制台可直接操作:
+- **啟用鎖定**主開關(預設關 = 只監看不鎖;打開才會真的鎖/解鎖)
+- 主人名字、離開上鎖秒數、解鎖去抖秒數
+- 各功能勾選(陌生臉、偷看、門鈴、出勤、番茄鐘、縮時、稽核、DnD)
+- 即時狀態(在席/螢幕已鎖)、紅色 **立即停用 (DISARM)** 鈕
+
+> 它與 `office_daemon.py` 共用同一套 PresenceEngine(冪等鎖、不會鎖死)。要無 GUI 常駐(Ubuntu server / 開機自動)才用 `office_daemon.py`。
+
+### 純監看測試（GUI,舊版）
 
 `tools/ble_wifi_tester.py`（PySide6 GUI）已內建 **Office 在場事件** 卡片：即時顯示 UDP 廣播的 `臉數/已辨識/陌生` + 狀態，並自動從廣播學到板子 IP 帶進 RTSP URL —— 搭配內建 RTSP 預覽，可同時看臉框(綠=已辨識/紅=unknown)與辨識結果，最適合一邊註冊臉一邊驗證。
 
