@@ -66,7 +66,7 @@ CONFIG = {
     # --- 身份與在席判定 ---
     "OWNER_NAMES": ["sheldon"],     # 視為「主人」的登錄名字(任一出現即在席)
     "ABSENCE_LOCK_SEC": 20,         # 主人消失多久才判定「離開」並鎖機(去抖)
-    "PRESENCE_DEBOUNCE_SEC": 2,     # 主人需連續出現多久才判定「到達」(去抖)
+    "PRESENCE_DEBOUNCE_SEC": 0.6,   # 主人需連續出現多久才判定「到達」並解鎖(越小越快解鎖;含板子辨識總延遲約 1~1.5s,在 2s 內)
     "RELOCK_GRACE_SEC": 8,          # 剛解鎖後這段時間內不准再鎖(避免回來瞬間又被鎖)
 
     # --- 網路 ---
@@ -890,6 +890,8 @@ def parse_args(argv):
                     help="覆寫 OWNER_NAMES(可多次)")
     ap.add_argument("--port", type=int, default=None,
                     help="覆寫 LISTEN_PORT")
+    ap.add_argument("--unlock-debounce", type=float, default=None,
+                    help="解鎖去抖秒數(越小越快解鎖,預設 0.6)")
     return ap.parse_args(argv)
 
 
@@ -899,6 +901,8 @@ def main(argv=None):
         CONFIG["OWNER_NAMES"] = args.owner
     if args.port:
         CONFIG["LISTEN_PORT"] = args.port
+    if args.unlock_debounce is not None:
+        CONFIG["PRESENCE_DEBOUNCE_SEC"] = args.unlock_debounce
 
     dry = args.dry_run
     armed = args.arm and not dry
