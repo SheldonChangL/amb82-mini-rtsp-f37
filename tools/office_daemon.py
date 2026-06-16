@@ -418,6 +418,35 @@ def snapshot(camera_ip, reason: str, dry_run: bool, subdir: str = "snapshots"):
     return None
 
 
+_SNAP_LOCK = threading.Lock()
+_SNAP_BUSY = False
+
+
+def snapshot_bg(camera_ip, reason: str, dry_run: bool, subdir: str = "snapshots"):
+    """在背景執行緒抓快照,絕不阻塞主迴圈。
+    snapshot() 內的 ffmpeg 會卡到 FFMPEG_TIMEOUT_SEC(預設 12s),若在主迴圈同步跑,
+    RTSP 一慢(例如攝影機剛重開)就會凍住整個 daemon。改丟背景執行緒,並以單一旗標
+    序列化:同時間只允許一個 ffmpeg,避免 RTSP 持續無回應時快照堆積。"""
+    global _SNAP_BUSY
+    with _SNAP_LOCK:
+        if _SNAP_BUSY:
+            log(f"snapshot({reason}) skipped: 上一張還在抓", "WARN")
+            return
+        _SNAP_BUSY = True
+
+    def _worker():
+        global _SNAP_BUSY
+        try:
+            snapshot(camera_ip, reason, dry_run, subdir)
+        except Exception as e:
+            log(f"snapshot({reason}) crashed: {e}", "ERROR")
+        finally:
+            with _SNAP_LOCK:
+                _SNAP_BUSY = False
+
+    threading.Thread(target=_worker, name=f"snap-{reason}", daemon=True).start()
+
+
 # ======================================================================
 # UDP I/O —— receiver thread + command sender
 # ======================================================================
@@ -915,7 +944,7 @@ class PresenceEngine:
         if CONFIG["FEAT_ATTENDANCE_LOG"]:
             self.att.on_arrived()
         if CONFIG["FEAT_AUDIT_PHOTOS"]:
-            snapshot(self.link.get_ip(), "unlock", self.dry_run, subdir="audit")
+            snapshot_bg(self.link.get_ip(), "unlock", self.dry_run, subdir="audit")
         if CONFIG["PUSH_LED"]:
             self.link.set_led("green", self.dry_run)
         # 開始 / 重置專注計時
@@ -933,7 +962,7 @@ class PresenceEngine:
         if CONFIG["FEAT_ATTENDANCE_LOG"]:
             self.att.on_departed()
         if CONFIG["FEAT_AUDIT_PHOTOS"]:
-            snapshot(self.link.get_ip(), "lock", self.dry_run, subdir="audit")
+            snapshot_bg(self.link.get_ip(), "lock", self.dry_run, subdir="audit")
         if CONFIG["PUSH_LED"]:
             self.link.set_led("off", self.dry_run)
         # 離席重置專注計時
@@ -950,7 +979,7 @@ class PresenceEngine:
             return
         log("FOREIGN FACE while owner away → lock + snapshot + notify", "WARN")
         self._do_lock("foreign face")            # 冪等;鎖一次後 _screen_locked 擋住後續
-        snapshot(self.link.get_ip(), "intruder", self.dry_run, subdir="audit")
+        snapshot_bg(self.link.get_ip(), "intruder", self.dry_run, subdir="audit")
         notify("Unknown person at your desk")
         if CONFIG["PUSH_LED"]:
             self.link.set_led("red", self.dry_run)
@@ -974,7 +1003,7 @@ class PresenceEngine:
             if now - self._last_visitor_notify >= CONFIG["VISITOR_COOLDOWN_SEC"]:
                 self._last_visitor_notify = now
                 notify("Someone approached your desk")
-                snapshot(self.link.get_ip(), "visitor", self.dry_run)
+                snapshot_bg(self.link.get_ip(), "visitor", self.dry_run)
 
     # ---- 6. 番茄鐘 ----
     def _pomodoro(self, now: float):
@@ -1035,7 +1064,7 @@ class PresenceEngine:
             return
         if now - self._last_timelapse >= CONFIG["TIMELAPSE_MIN"] * 60:
             self._last_timelapse = now
-            snapshot(self.link.get_ip(), "timelapse", self.dry_run, subdir="timelapse")
+            snapshot_bg(self.link.get_ip(), "timelapse", self.dry_run, subdir="timelapse")
             # 組裝縮時影片(離線):
             #   ffmpeg -framerate 12 -pattern_type glob -i '~/amb82-office/timelapse/*.jpg' \
             #          -c:v libx264 -pix_fmt yuv420p timelapse.mp4
