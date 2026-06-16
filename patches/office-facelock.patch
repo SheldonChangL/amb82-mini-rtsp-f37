@@ -21,7 +21,7 @@ index 43e5a5d..3681eca 100755
  	}
  	vipnn_mark();
 diff --git a/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/mmf2_video_example_face_rtsp_init.c b/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/mmf2_video_example_face_rtsp_init.c
-index 855dab6..8608322 100755
+index 855dab6..f622dd7 100755
 --- a/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/mmf2_video_example_face_rtsp_init.c
 +++ b/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/mmf2_video_example_face_rtsp_init.c
 @@ -15,6 +15,7 @@
@@ -49,6 +49,14 @@ index 855dab6..8608322 100755
  #if (USE_UPDATED_VIDEO_HEAP == 0)
  	int voe_heap_size = video_voe_presetting(V1_ENA, RTSP_WIDTH, RTSP_HEIGHT, RTSP_BPS, 0,
  						0, 0, 0, 0, 0,
+@@ -315,6 +319,7 @@ void mmf2_video_example_face_rtsp_init(void)
+ 	if (facerecog_ctx) {
+ 		mm_module_ctrl(facerecog_ctx, CMD_FRC_SET_THRES100, 99);  // 99/100 = 0.99 --> set a value to get lowest FP rate
+ 		mm_module_ctrl(facerecog_ctx, CMD_FRC_SET_OSD_DRAW, (int)face_draw_object);
++		mm_module_ctrl(facerecog_ctx, CMD_FRC_LOAD_FEATURES, 0);  // office: 開機自動載入 flash 已存的臉(FRFS 存過的)
+ 	} else {
+ 		printf("FACERECOG open fail\n\r");
+ 		goto mmf2_example_face_rtsp_fail;
 diff --git a/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/office_event.c b/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/office_event.c
 new file mode 100644
 index 0000000..2e3b6fc

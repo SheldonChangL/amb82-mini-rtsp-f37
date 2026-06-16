@@ -50,13 +50,19 @@ cmake --build . --target flash_nn -j
 
 開 console（`tio /dev/cu.usbserial-XXX -b 115200`），對著鏡頭，輸入 AT 指令：
 
+指令用 **`=`** 分隔、無參數的尾巴也加 `=`(console 的 parser 以 `=` 切指令名):
+
 ```
-FREG sheldon     # 進註冊模式，名字叫 sheldon（對準鏡頭數秒）
-FRFS             # 存到 flash（重開不掉）
-FRRM             # 回到辨識模式
+FREG=sheldon     # 進註冊模式,名字 sheldon —— 按 Enter 那一刻臉要正對鏡頭(它抓下一幀)
+FRFS=            # 存到 flash(0xF05000),持久化
+FRRM=            # 回到辨識模式(存完會自動切回,保險再打)
 ```
 
-辨識到你時 RTSP 畫面會框綠色 + 名字；陌生臉框紅色 "unknown"。**daemon 的 `--owner` 要跟這裡的名字一致。**
+> **重開會記得嗎?** 會,但要兩個條件都滿足:① 有 `FRFS=` 存進 flash(只 `FREG=` 是 RAM,重開即失);② 韌體開機自動載入。**office patch 已加開機自動 `CMD_FRC_LOAD_FEATURES`**,所以 `FRFS=` 存過後,重開/重燒韌體都會自動把臉載回來(臉資料在獨立 system-data 區 `0xF05000`,重燒韌體不會清掉)。開機 log 會出現 `Face feature N` 表示載入了 N 張臉。
+>
+> 重設清空已存的臉:`FRFR=`。
+
+辨識到你時 RTSP 畫面會框綠色 + 名字;陌生臉框紅色 "unknown"。**daemon / 桌面 app 的「主人名字」要跟這裡一致。**
 
 ## 跑 daemon（Mac / Linux）
 
