@@ -21,7 +21,7 @@ index 43e5a5d..3681eca 100755
  	}
  	vipnn_mark();
 diff --git a/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/mmf2_video_example_face_rtsp_init.c b/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/mmf2_video_example_face_rtsp_init.c
-index 855dab6..f622dd7 100755
+index 855dab6..5fe4642 100755
 --- a/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/mmf2_video_example_face_rtsp_init.c
 +++ b/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/mmf2_video_example_face_rtsp_init.c
 @@ -15,6 +15,7 @@
@@ -41,7 +41,33 @@ index 855dab6..f622dd7 100755
  	int im_h = RTSP_HEIGHT;
  	int im_w = RTSP_WIDTH;
  
-@@ -226,6 +229,7 @@ void mmf2_video_example_face_rtsp_init(void)
+@@ -222,10 +225,33 @@ static void face_draw_object(void *p, void *img_param)
+ 
+ }
+ 
++// office: 桌面 app 經 UDP(:48556)送來的指令,驅動人臉註冊/存檔/重設。
++static char office_enroll_name[32];
++static void office_cmd_handler(const char *cmd, const char *name)
++{
++	if (!facerecog_ctx) {
++		return;
++	}
++	if (!strcmp(cmd, "enroll")) {
++		strncpy(office_enroll_name, name, sizeof(office_enroll_name) - 1);
++		office_enroll_name[sizeof(office_enroll_name) - 1] = '\0';
++		printf("[OFFICE] enroll '%s' (capture next frame)\r\n", office_enroll_name);
++		mm_module_ctrl(facerecog_ctx, CMD_FRC_REGISTER_MODE, (int)office_enroll_name);
++	} else if (!strcmp(cmd, "save")) {
++		mm_module_ctrl(facerecog_ctx, CMD_FRC_SAVE_FEATURES, 0);
++	} else if (!strcmp(cmd, "reset")) {
++		mm_module_ctrl(facerecog_ctx, CMD_FRC_RESET_FEATURES, 0);
++		mm_module_ctrl(facerecog_ctx, CMD_FRC_SAVE_FEATURES, 0);
++	} else if (!strcmp(cmd, "recog")) {
++		mm_module_ctrl(facerecog_ctx, CMD_FRC_RECOGNITION_MODE, 0);
++	}
++}
++
+ void mmf2_video_example_face_rtsp_init(void)
  {
  	USE_FACEDET_MODEL;
  	USE_FACENET_MODEL;
@@ -49,20 +75,21 @@ index 855dab6..f622dd7 100755
  #if (USE_UPDATED_VIDEO_HEAP == 0)
  	int voe_heap_size = video_voe_presetting(V1_ENA, RTSP_WIDTH, RTSP_HEIGHT, RTSP_BPS, 0,
  						0, 0, 0, 0, 0,
-@@ -315,6 +319,7 @@ void mmf2_video_example_face_rtsp_init(void)
+@@ -315,6 +341,8 @@ void mmf2_video_example_face_rtsp_init(void)
  	if (facerecog_ctx) {
  		mm_module_ctrl(facerecog_ctx, CMD_FRC_SET_THRES100, 99);  // 99/100 = 0.99 --> set a value to get lowest FP rate
  		mm_module_ctrl(facerecog_ctx, CMD_FRC_SET_OSD_DRAW, (int)face_draw_object);
 +		mm_module_ctrl(facerecog_ctx, CMD_FRC_LOAD_FEATURES, 0);  // office: 開機自動載入 flash 已存的臉(FRFS 存過的)
++		office_event_set_cmd_handler(office_cmd_handler);        // office: 讓桌面 app 經 UDP 註冊人臉
  	} else {
  		printf("FACERECOG open fail\n\r");
  		goto mmf2_example_face_rtsp_fail;
 diff --git a/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/office_event.c b/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/office_event.c
 new file mode 100644
-index 0000000..2e3b6fc
+index 0000000..7868591
 --- /dev/null
 +++ b/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/office_event.c
-@@ -0,0 +1,138 @@
+@@ -0,0 +1,210 @@
 +/*
 + * office_event.c — broadcast face-recognition state over UDP for the office
 + * presence/lock system. Host-side daemon (tools/office_daemon.py) consumes it.
@@ -83,9 +110,75 @@ index 0000000..2e3b6fc
 +#define OFFICE_MIN_INTERVAL_MS 250    /* throttle: don't send faster than this */
 +#define OFFICE_JSON_MAX        512
 +
-+static int      s_sock = -1;
-+static uint32_t s_last_send_ms = 0;
-+static char     s_last_payload[OFFICE_JSON_MAX] = {0};
++#define OFFICE_CMD_PORT        48556   /* inbound commands (enroll/save/reset) */
++
++static int             s_sock = -1;
++static uint32_t        s_last_send_ms = 0;
++static char            s_last_payload[OFFICE_JSON_MAX] = {0};
++static office_cmd_cb_t s_cmd_cb = NULL;
++
++void office_event_set_cmd_handler(office_cmd_cb_t cb)
++{
++	s_cmd_cb = cb;
++}
++
++/* Extract the string value of "key":"value" from a flat JSON object. 1 if found. */
++static int json_str(const char *json, const char *key, char *out, int cap)
++{
++	char pat[40];
++	const char *p;
++	int n = 0;
++	snprintf(pat, sizeof(pat), "\"%s\"", key);
++	p = strstr(json, pat);
++	if (!p) {
++		return 0;
++	}
++	p = strchr(p + strlen(pat), ':');
++	if (!p) {
++		return 0;
++	}
++	p++;
++	while (*p == ' ' || *p == '\t') {
++		p++;
++	}
++	if (*p != '"') {
++		return 0;
++	}
++	p++;
++	while (*p && *p != '"' && n < cap - 1) {
++		out[n++] = *p++;
++	}
++	out[n] = '\0';
++	return 1;
++}
++
++/* Blocking UDP receiver: parses {"cmd":...,"name":...} and dispatches to s_cmd_cb. */
++static void office_rx_task(void *arg)
++{
++	char buf[256], cmd[32], name[32];
++	struct sockaddr_in from;
++	socklen_t flen;
++	int n;
++	(void)arg;
++	while (1) {
++		flen = sizeof(from);
++		n = recvfrom(s_sock, buf, sizeof(buf) - 1, 0, (struct sockaddr *)&from, &flen);
++		if (n <= 0) {
++			vTaskDelay(10);
++			continue;
++		}
++		buf[n] = '\0';
++		if (!json_str(buf, "cmd", cmd, sizeof(cmd))) {
++			continue;
++		}
++		name[0] = '\0';
++		json_str(buf, "name", name, sizeof(name));
++		printf("[OFFICE] rx cmd='%s' name='%s'\r\n", cmd, name);
++		if (s_cmd_cb) {
++			s_cmd_cb(cmd, name);
++		}
++	}
++}
 +
 +static uint32_t now_ms(void)
 +{
@@ -108,14 +201,20 @@ index 0000000..2e3b6fc
 +	/* allow broadcast */
 +	setsockopt(s_sock, SOL_SOCKET, SO_BROADCAST, &opt, sizeof(opt));
 +
-+	/* bind to an ephemeral local port so we can also receive commands later */
++	/* bind to the command port so the same socket also receives inbound cmds */
 +	memset(&local, 0, sizeof(local));
 +	local.sin_family = AF_INET;
 +	local.sin_addr.s_addr = INADDR_ANY;
-+	local.sin_port = htons(OFFICE_EVENT_PORT + 1); /* 48556 for inbound cmds */
++	local.sin_port = htons(OFFICE_CMD_PORT); /* 48556 for inbound cmds (enroll/save/reset) */
 +	bind(s_sock, (struct sockaddr *)&local, sizeof(local));
 +
-+	printf("[OFFICE] event emitter ready (udp bcast :%d)\r\n", OFFICE_EVENT_PORT);
++	/* receiver task: handles enroll/save/reset from the desktop app */
++	if (xTaskCreate(office_rx_task, "office_rx", 4096, NULL, tskIDLE_PRIORITY + 1, NULL) != pdPASS) {
++		printf("[OFFICE] rx task create fail\r\n");
++	}
++
++	printf("[OFFICE] event emitter ready (bcast :%d, cmd rx :%d)\r\n",
++		   OFFICE_EVENT_PORT, OFFICE_CMD_PORT);
 +}
 +
 +/* Append a JSON-escaped string (only handles the chars a face name realistically
@@ -203,10 +302,10 @@ index 0000000..2e3b6fc
 +}
 diff --git a/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/office_event.h b/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/office_event.h
 new file mode 100644
-index 0000000..6b1165f
+index 0000000..5d65adf
 --- /dev/null
 +++ b/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/office_event.h
-@@ -0,0 +1,28 @@
+@@ -0,0 +1,34 @@
 +/*
 + * office_event.h — AMB82-mini "office" presence event emitter.
 + *
@@ -229,6 +328,12 @@ index 0000000..6b1165f
 + * Broadcasts {"dev","ts","faces","known":[...],"unknown"} to 255.255.255.255:48555,
 + * rate-limited (on-change + heartbeat). No-op until office_event_init() succeeds. */
 +void office_event_report(frc_draw_t *fdraw);
++
++/* Inbound command handler. The UDP receiver (port 48556) parses {"cmd":...,"name":...}
++ * and invokes this. The face example registers a handler that drives enrollment.
++ * cmd ∈ {"enroll","save","reset","recog"}; name is the identity for "enroll" (else ""). */
++typedef void (*office_cmd_cb_t)(const char *cmd, const char *name);
++void office_event_set_cmd_handler(office_cmd_cb_t cb);
 +
 +#ifdef __cplusplus
 +}

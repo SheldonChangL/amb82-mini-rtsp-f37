@@ -374,6 +374,22 @@ class MainWindow(QWidget):
         grid.addWidget(self.sp_debounce, 2, 1)
         fv.addLayout(grid)
 
+        # 4.5) 人臉註冊(經 UDP :48556 送指令到板子,免 console)
+        ecap = QLabel("人臉註冊(對著鏡頭按「註冊」即可,免 console)")
+        ecap.setObjectName("code"); fv.addWidget(ecap)
+        erow = QHBoxLayout()
+        self.ed_enroll = QLineEdit(CONFIG["OWNER_NAMES"][0] if CONFIG["OWNER_NAMES"] else "")
+        self.ed_enroll.setPlaceholderText("要登錄的名字")
+        self.btn_enroll = QPushButton("註冊人臉")
+        self.btn_enroll.clicked.connect(self.on_enroll)
+        self.btn_clearface = QPushButton("清除已註冊")
+        self.btn_clearface.setObjectName("alt")
+        self.btn_clearface.clicked.connect(self.on_clear_faces)
+        erow.addWidget(self.ed_enroll, 1)
+        erow.addWidget(self.btn_enroll)
+        erow.addWidget(self.btn_clearface)
+        fv.addLayout(erow)
+
         # 5) 功能開關
         feat_cap = QLabel("功能開關"); feat_cap.setObjectName("code")
         fv.addWidget(feat_cap)
@@ -424,6 +440,60 @@ class MainWindow(QWidget):
     def _on_owner_changed(self, text):
         text = text.strip()
         CONFIG["OWNER_NAMES"] = [text] if text else []
+
+    # ---------- 人臉註冊(UDP → 板子 :48556) ----------
+    def _camera_ip(self):
+        ip = self.ip or (self.link.get_ip() if hasattr(self, "link") else "")
+        return ip or ""
+
+    def _send_cmd(self, payload):
+        ip = self._camera_ip()
+        if not ip:
+            self.log("還沒收到板子事件(不知道板子 IP),無法送指令——先確認在席監看有資料", "warn")
+            return False
+        try:
+            if getattr(self, "_cmd_sock", None) is None:
+                self._cmd_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self._cmd_sock.sendto(json.dumps(payload).encode("utf-8"), (ip, 48556))
+            return True
+        except Exception as e:
+            self.log(f"送指令失敗:{e}", "err")
+            return False
+
+    def on_enroll(self):
+        name = self.ed_enroll.text().strip()
+        if not name:
+            self.log("請先輸入要登錄的名字", "warn")
+            return
+        if not self._camera_ip():
+            self.log("還沒收到板子事件,無法註冊", "warn")
+            return
+        self._enroll_name = name
+        self._enroll_count = 3
+        self.btn_enroll.setEnabled(False)
+        self.log(f"註冊「{name}」:請正對鏡頭…", "ok")
+        self._enroll_tick()
+
+    def _enroll_tick(self):
+        if self._enroll_count > 0:
+            self.log(f"擷取倒數 {self._enroll_count}…")
+            self._enroll_count -= 1
+            QTimer.singleShot(1000, self._enroll_tick)
+            return
+        if self._send_cmd({"cmd": "enroll", "name": self._enroll_name}):
+            self.log("已擷取,0.8 秒後存進 flash…")
+            QTimer.singleShot(800, self._enroll_save)
+        else:
+            self.btn_enroll.setEnabled(True)
+
+    def _enroll_save(self):
+        self._send_cmd({"cmd": "save"})
+        self.log(f"已註冊並存檔:{self._enroll_name}(重開機會自動記得)", "ok")
+        self.btn_enroll.setEnabled(True)
+
+    def on_clear_faces(self):
+        if self._send_cmd({"cmd": "reset"}):
+            self.log("已送出:清除板子上所有已註冊人臉", "warn")
 
     def on_disarm(self):
         """硬停用:取消 armed、收起主開關、並建立 DISARM 失效保險檔。"""
