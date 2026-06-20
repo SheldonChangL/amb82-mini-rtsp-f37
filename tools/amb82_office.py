@@ -68,7 +68,7 @@ except ImportError:
 # ---- 重用 daemon 引擎:鎖定/解鎖邏輯一律不重寫 -------------------------
 import office_daemon
 from office_daemon import (
-    PresenceEngine, make_controller, CONFIG, base_dir, ensure_dir, notify,
+    PresenceEngine, GestureKeys, make_controller, CONFIG, base_dir, ensure_dir, notify,
 )
 
 # ---- protocol UUIDs (16-bit, canonical 128-bit form) ---------------------
@@ -185,6 +185,8 @@ class MainWindow(QWidget):
         self.link = GuiCameraLink()
         self.engine = PresenceEngine(
             self.link, make_controller(dry_run=False), dry_run=False, armed=False)
+        # 手勢→方向鍵:重用引擎的跨平台 controller(與在席事件共用 48555 廣播)
+        self.gesture = GestureKeys(self.engine.ctrl, dry_run=False)
         self._last_engine_tick = 0.0          # engine.tick()/feed(None) 的 ~1s 節流
         self._prev_present = None             # 偵測在席狀態轉變以寫 GUI log
         self._prev_locked = None              # 偵測螢幕鎖狀態轉變以寫 GUI log
@@ -397,6 +399,13 @@ class MainWindow(QWidget):
             cb.toggled.connect(lambda c, k=key: CONFIG.__setitem__(k, bool(c)))
             fgrid.addWidget(cb, i // 2, i % 2)
         fv.addLayout(fgrid)
+
+        # 5.5) 手勢控制方向鍵(對應 office_daemon 的 GESTURE_TO_KEYS;與在席事件並存)
+        self.cb_gesture = QCheckBox("手勢控制方向鍵(left/right → ←/→)")
+        self.cb_gesture.setChecked(bool(CONFIG.get("GESTURE_TO_KEYS", True)))
+        self.cb_gesture.toggled.connect(
+            lambda c: CONFIG.__setitem__("GESTURE_TO_KEYS", bool(c)))
+        fv.addWidget(self.cb_gesture)
 
         # 6) 即時狀態列
         sep = QFrame(); sep.setFrameShape(QFrame.HLine)
@@ -721,6 +730,20 @@ class MainWindow(QWidget):
                     pass
         threading.Thread(target=run, daemon=True).start()
 
+    def _maybe_gesture(self, data):
+        """是手勢封包就交給 GestureKeys 並回 True;否則回 False(維持在席流程)。"""
+        try:
+            ev = json.loads(data.decode("utf-8", "replace"))
+        except Exception:
+            return False
+        if not isinstance(ev, dict) or ev.get("dev") != CONFIG["GESTURE_DEV"]:
+            return False
+        try:
+            self.gesture.handle(ev)
+        except Exception as e:
+            self.log(f"手勢處理錯誤:{e}", "err")
+        return True
+
     def _drain_office(self):
         """200ms 定時:消化 UDP 佇列、更新監看標籤、餵事件給 PresenceEngine。"""
         last = None
@@ -731,6 +754,9 @@ class MainWindow(QWidget):
                 break
             if item[0] == "err":
                 self.lbl_ostate.setText(f"UDP 監聽失敗:{item[1]}（48555 是否被佔用？）")
+                continue
+            # 手勢事件逐筆即時分派(不像在席事件只取最後一筆,避免連續手勢被吃掉)
+            if self._maybe_gesture(item[2]):
                 continue
             last = item
 
