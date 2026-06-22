@@ -113,6 +113,11 @@ CONFIG = {
     "DND_HOOK": None,               # 例:'my-dnd.sh {state}';{state}∈present/meeting/away
     "ALLOW_NOPW_WAKE": False,       # macOS:你已自行關閉喚醒密碼?(僅影響 log 措辭)
     "PUSH_LED": False,              # 是否把狀態 LED 指令推回攝影機(韌體端未來功能)
+
+    # --- 手勢 → 鍵盤方向鍵(與在席事件並存於同一 UDP :48555 廣播)---
+    "GESTURE_TO_KEYS": True,        # 總開關:收到手勢事件時注入方向鍵(關閉時只記 log、不送鍵)
+    "GESTURE_DEBOUNCE_SEC": 0.3,    # 同一方向去抖:此秒數內重複只觸發一次(避免韌體連發/心跳灌爆按鍵)
+    "GESTURE_DEV": "amb82-gesture", # 手勢事件的 dev 欄位(與在席 amb82-office 區分分派)
 }
 
 
@@ -183,6 +188,10 @@ class OSController:
     def keep_awake_off(self): pass
     def wake(self): pass
 
+    def press_arrow(self, direction: str):
+        # 未知平台:no-op + WARN(與其餘動作對齊,絕不崩潰)
+        log(f"press {direction} arrow unsupported on this OS → no-op", "WARN")
+
 
 class MacController(OSController):
     """macOS:pmset / osascript / caffeinate。"""
@@ -219,6 +228,14 @@ class MacController(OSController):
         if self._dry("wake display"):
             return
         run_cmd(["caffeinate", "-u", "-t", "2"], timeout=6)
+
+    def press_arrow(self, direction: str):
+        # 左 = key code 123、右 = key code 124(走既有 osascript 風格)
+        code = 123 if direction == "left" else 124
+        run_cmd([
+            "osascript", "-e",
+            f'tell application "System Events" to key code {code}',
+        ], timeout=6)
 
     def keep_awake_on(self):
         if self._caffeinate and self._caffeinate.poll() is None:
@@ -319,6 +336,14 @@ class LinuxController(OSController):
             return
         run_cmd(["xset", "dpms", "force", "on"], timeout=4)
 
+    def press_arrow(self, direction: str):
+        # 用 xdotool 注入方向鍵;沒裝就 WARN 後略過(絕不讓主迴圈崩潰)
+        if shutil.which("xdotool") is None:
+            log("xdotool not installed → cannot inject arrow key, skipped", "WARN")
+            return
+        key = "Left" if direction == "left" else "Right"
+        run_cmd(["xdotool", "key", key], timeout=4)
+
     def keep_awake_on(self):
         if self._inhibit and self._inhibit.poll() is None:
             return
@@ -365,6 +390,52 @@ def make_controller(dry_run: bool) -> OSController:
         return LinuxController(dry_run)
     log(f"OS '{sysname}' unsupported → no-op controller (lock/unlock disabled)", "WARN")
     return OSController(dry_run)
+
+
+# ======================================================================
+# Gesture → 鍵盤方向鍵
+#   重用既有 OSController.press_arrow 注入按鍵;去抖 + 開關 + dry-run + DISARM
+#   失效保險都與在席鎖屏一致。主迴圈絕不因單一手勢失敗而中止。
+# ======================================================================
+class GestureKeys:
+    def __init__(self, ctrl: OSController, dry_run: bool):
+        self.ctrl = ctrl
+        self.dry_run = dry_run
+        self._last = {}  # direction -> 上次觸發的 monotonic 時間(去抖)
+
+    def _disarmed_by_file(self) -> bool:
+        try:
+            return os.path.exists(os.path.join(base_dir(), "DISARM"))
+        except Exception:
+            return False
+
+    def handle(self, evt: dict):
+        """收到 {"dev":"amb82-gesture",...,"gesture":"left|right"} 時呼叫。"""
+        if not CONFIG["GESTURE_TO_KEYS"]:
+            log(f"[手勢→方向鍵 關閉] ignore gesture={evt.get('gesture')!r}")
+            return
+        g = str(evt.get("gesture") or "").strip().lower()
+        if g not in ("left", "right"):
+            log(f"unknown gesture {evt.get('gesture')!r}, ignored", "WARN")
+            return
+        # 去抖:同一方向在 GESTURE_DEBOUNCE_SEC 內重複只觸發一次
+        now = time.monotonic()
+        last = self._last.get(g)
+        if last is not None and now - last < CONFIG["GESTURE_DEBOUNCE_SEC"]:
+            return
+        self._last[g] = now
+        # 失效保險:DISARM 檔存在時只記 log、不送鍵
+        if self._disarmed_by_file():
+            log(f"[DISARM 檔存在 → 不送鍵] gesture {g}", "WARN")
+            return
+        if self.dry_run:
+            log(f"[DRY-RUN] would press {g} arrow key")
+            return
+        log(f"GESTURE {g} → {g} arrow key")
+        try:
+            self.ctrl.press_arrow(g)
+        except Exception as e:
+            log(f"press_arrow({g}) failed: {e}", "WARN")
 
 
 # ======================================================================
@@ -459,6 +530,7 @@ class CameraLink:
         self._lock = threading.Lock()
         self._sock = None
         self._tx = None
+        self.gesture = None  # GestureKeys;由 main() 注入(手勢事件分派)
 
     def open(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -490,7 +562,12 @@ class CameraLink:
         except Exception:
             log(f"malformed datagram from {addr[0]} ({len(data)}B), ignored", "WARN")
             return None
-        # dev 過濾
+        # 手勢事件:與在席事件並存於同一 socket,但走獨立分派(不影響在席邏輯)
+        if evt.get("dev") == CONFIG["GESTURE_DEV"]:
+            if self.gesture is not None:
+                self.gesture.handle(evt)
+            return None
+        # dev 過濾(在席事件)
         if CONFIG["DEV_FILTER"] and evt.get("dev") != CONFIG["DEV_FILTER"]:
             return None
         with self._lock:
@@ -1145,6 +1222,8 @@ def main(argv=None):
         f"relock_grace={CONFIG['RELOCK_GRACE_SEC']}s")
     enabled = [k for k, v in CONFIG.items() if k.startswith("FEAT_") and v]
     log(f"features: {', '.join(enabled)}")
+    log(f"gesture→keys: {'ON' if CONFIG['GESTURE_TO_KEYS'] else 'OFF'} "
+        f"(debounce {CONFIG['GESTURE_DEBOUNCE_SEC']}s)")
     log("=" * 60)
 
     _install_signal_handlers()
@@ -1166,6 +1245,10 @@ def main(argv=None):
         except Exception as e:
             log(f"FATAL: cannot bind UDP {CONFIG['LISTEN_PORT']}: {e}", "ERROR")
             return 1
+
+    # 手勢→方向鍵:掛到 UDP link(與在席事件並存於同一個 48555 廣播)
+    if isinstance(link, CameraLink):
+        link.gesture = GestureKeys(ctrl, dry)
 
     engine = PresenceEngine(link, ctrl, dry, armed=armed)
 
