@@ -180,10 +180,10 @@ index 0000000..2985bd9
 +#endif /* GESTURE_DETECT_H */
 diff --git a/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/gesture_event.c b/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/gesture_event.c
 new file mode 100644
-index 0000000..c323987
+index 0000000..2ffb420
 --- /dev/null
 +++ b/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/gesture_event.c
-@@ -0,0 +1,88 @@
+@@ -0,0 +1,115 @@
 +/******************************************************************************
 +*
 +* gesture_event.c - UDP event sender for hand-gesture example
@@ -212,6 +212,8 @@ index 0000000..c323987
 +static int gesture_sock = -1;
 +static struct sockaddr_in gesture_dest;
 +
++static void gesture_hb_task(void *arg);
++
 +int gesture_event_init(void)
 +{
 +	int opt = 1;
@@ -234,7 +236,12 @@ index 0000000..c323987
 +	gesture_dest.sin_port = htons(GESTURE_EVENT_DEST_PORT);  /* 48555, shared bcast port */
 +	gesture_dest.sin_addr.s_addr = htonl(INADDR_BROADCAST);  /* 255.255.255.255 */
 +
-+	printf("[gesture_event] UDP gesture events -> bcast :%d\n\r",
++	/* heartbeat task:讓桌面 app 隨時學到板子 IP / 知道相機活著 */
++	if (xTaskCreate(gesture_hb_task, "gesture_hb", 2048, NULL, tskIDLE_PRIORITY + 1, NULL) != pdPASS) {
++		printf("[gesture_event] WARN: heartbeat task create fail\n\r");
++	}
++
++	printf("[gesture_event] UDP gesture events + heartbeat -> bcast :%d\n\r",
 +		   GESTURE_EVENT_DEST_PORT);
 +	return 0;
 +}
@@ -262,6 +269,26 @@ index 0000000..c323987
 +	if (ret < 0) {
 +		/* Log only; never block the逐幀 DISPPOST callback. */
 +		printf("[gesture_event] WARN: sendto failed\n\r");
++	}
++}
++
++/* Heartbeat: 每秒廣播一筆(不含 gesture 欄位),讓桌面 app 隨時學到板子 IP、
++ * 知道相機活著(否則手勢模式平常不廣播 → GUI camera LOST、RTSP 學不到 IP)。
++ * 慣例:每個功能的事件模組都該發心跳。客戶端見無 left/right 即忽略,不誤觸按鍵。 */
++static void gesture_hb_task(void *arg)
++{
++	char json[GESTURE_JSON_MAX];
++	uint32_t t;
++	(void)arg;
++	while (1) {
++		vTaskDelay(1000 / portTICK_RATE_MS);
++		if (gesture_sock < 0) {
++			continue;
++		}
++		t = (uint32_t)(xTaskGetTickCount() * portTICK_RATE_MS);
++		snprintf(json, sizeof(json), "{\"dev\":\"amb82-gesture\",\"ts\":%u}", (unsigned)t);
++		sendto(gesture_sock, json, strlen(json), 0,
++			   (struct sockaddr *)&gesture_dest, sizeof(gesture_dest));
 +	}
 +}
 +

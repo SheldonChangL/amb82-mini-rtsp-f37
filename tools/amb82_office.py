@@ -738,10 +738,14 @@ class MainWindow(QWidget):
             return False
         if not isinstance(ev, dict) or ev.get("dev") != CONFIG["GESTURE_DEV"]:
             return False
-        try:
-            self.gesture.handle(ev)
-        except Exception as e:
-            self.log(f"手勢處理錯誤:{e}", "err")
+        # 只有真正的 left/right 揮手才交給 GestureKeys;心跳(無 gesture 欄位)靜默消化
+        # (IP 已在 drain 迴圈最前面從來源學到,這裡只負責按鍵)
+        g = str(ev.get("gesture") or "").strip().lower()
+        if g in ("left", "right"):
+            try:
+                self.gesture.handle(ev)
+            except Exception as e:
+                self.log(f"手勢處理錯誤:{e}", "err")
         return True
 
     def _drain_office(self):
