@@ -755,6 +755,14 @@ class MainWindow(QWidget):
             if item[0] == "err":
                 self.lbl_ostate.setText(f"UDP 監聽失敗:{item[1]}（48555 是否被佔用？）")
                 continue
+            # ── 功能無關的板子 IP 發現 ──
+            # 任何 amb82-* 封包(office / gesture / 未來任何功能)都從來源位址學到板子 IP,
+            # 自動帶入 RTSP。新功能只要照慣例在 :48555 廣播 dev:"amb82-*" 即可,GUI 不必再改。
+            if not self.ip and item[1] and b"amb82" in item[2]:
+                self.ip = item[1]
+                self.lbl_url.setText(f"rtsp://{item[1]}:554")
+                self.link.note_packet(item[1])
+                self.log(f"從廣播學到板子 IP {item[1]} → RTSP 可用", "ok")
             # 手勢事件逐筆即時分派(不像在席事件只取最後一筆,避免連續手勢被吃掉)
             if self._maybe_gesture(item[2]):
                 continue
