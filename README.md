@@ -33,6 +33,7 @@
 - [`tools/office_daemon.py`](tools/office_daemon.py)：無 GUI 的常駐版(Ubuntu server / 開機自動跑),純 stdlib;支援 **MQTT 模式**(`--mqtt`)同時控制多台機器,與桌面 app 共用同一套 PresenceEngine
 - **MQTT(多機/通知)**:[`tools/udp_mqtt_bridge.py`](tools/udp_mqtt_bridge.py)(Linux 上把板子 UDP 轉 MQTT)+ [`tools/mqtt_notify.py`](tools/mqtt_notify.py)(發通知到 Mac);設定見 [docs/mqtt.md](docs/mqtt.md)
 - [`tools/ble_wifi_tester.py`](tools/ble_wifi_tester.py)：早期精簡版(僅 BLE 配網 + RTSP),已被 amb82_office 取代
+- **[`tools/build_firmware.py`](tools/build_firmware.py)** — **功能模式選擇 build**:`python3 build_firmware.py <office|gesture|rtsp>` 一鍵切換(自動設好 active 範例 + FWFS NN 模型清單,避免漏改)→ build flash_nn → 印出 bin 與燒錄指令。新增功能在 `MODES` 加一筆即可。
 - [`update-patch.sh`](update-patch.sh)：重新產生 F37 patch 並 push
 - patch：[`patches/office-facelock.patch`](patches/office-facelock.patch)（office 韌體:UDP 事件廣播 + face 範例掛勾）
 
