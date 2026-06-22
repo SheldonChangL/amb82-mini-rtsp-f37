@@ -11,6 +11,8 @@
 |------|------|
 | [docs/f37-rtsp.md](docs/f37-rtsp.md) | **核心**：macOS 原生 build、F37 sensor RTSP 無畫面的根因與修正、build/燒錄/看影像、踩雷整理 |
 | [docs/office.md](docs/office.md) | **Office 應用**：人臉辨識 → 鎖定/解鎖(Linux 真解鎖 / macOS presence-hold) + 在場自動化(出勤/番茄鐘/陌生臉/偷看…)；薄韌體 UDP + Python daemon |
+| [docs/gesture.md](docs/gesture.md) | **手勢控制**：揮手 → 鍵盤方向鍵(簡報翻頁);patch `gesture-keys.patch` + daemon/GUI 的 GestureKeys |
+| [docs/mqtt.md](docs/mqtt.md) | **MQTT**(跨網段/多機/通知):UDP→MQTT 橋接 + daemon `--mqtt` + 通知到 Mac |
 | [docs/ble-provisioning.md](docs/ble-provisioning.md) | **BLE 配網（預設）**：開機無 Wi-Fi → 廣播 `Ameba_AMB82` → 經 BLE 下發帳密；含 Python 測試工具 |
 | [docs/ble-provision-protocol.md](docs/ble-provision-protocol.md) | BLE 配網的完整 GATT 協定（UUID、寫入順序、狀態碼、Web Bluetooth 範例） |
 | [docs/qr-provisioning.md](docs/qr-provisioning.md) | QR 掃碼配網 + 狀態 LED（備用；因定焦鏡頭近距離難對焦已退為次選） |

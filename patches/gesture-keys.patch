@@ -1,0 +1,369 @@
+diff --git a/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/gesture_detect.c b/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/gesture_detect.c
+new file mode 100644
+index 0000000..20aeaca
+--- /dev/null
++++ b/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/gesture_detect.c
+@@ -0,0 +1,118 @@
++/******************************************************************************
++*
++* gesture_detect.c - two-finger (index+middle) horizontal swipe detector
++*
++* Pure logic, no I/O. Finger counting uses normalized-space landmarks
++* (middle finger up, so "extended" == fingertip.y < pip.y). Swipe tracking
++* uses the image-space palm-center x.
++*
++******************************************************************************/
++#include <stdbool.h>
++#include <math.h>
++
++/* module_vipnn.h needs bool / mm_module_t -> include prerequisites first. */
++#include "mmf2_module.h"
++#include "module_vipnn.h"
++
++#include "platform_opts.h"
++#include "gesture_detect.h"
++
++#ifndef GESTURE_SWIPE_RATIO
++#define GESTURE_SWIPE_RATIO      0.15f
++#endif
++#ifndef GESTURE_SWIPE_WINDOW_MS
++#define GESTURE_SWIPE_WINDOW_MS  500
++#endif
++#ifndef GESTURE_DEBOUNCE_MS
++#define GESTURE_DEBOUNCE_MS      500
++#endif
++
++/* MediaPipe 21-point hand landmark indices */
++#define LM_THUMB_TIP    4
++#define LM_THUMB_MCP    2
++#define LM_INDEX_TIP    8
++#define LM_INDEX_PIP    6
++#define LM_MIDDLE_TIP   12
++#define LM_MIDDLE_PIP   10
++#define LM_RING_TIP     16
++#define LM_RING_PIP     14
++#define LM_PINKY_TIP    20
++#define LM_PINKY_PIP    18
++
++typedef struct {
++	bool window_active;     /* a swipe window is currently being tracked */
++	float start_x;          /* image-space palm x at window start */
++	uint32_t start_ms;      /* window start time */
++	uint32_t lock_until_ms; /* debounce: ignore swipes until this time */
++} gesture_state_t;
++
++static gesture_state_t s_state = {0};
++
++/* Returns true if the pose is "index + middle extended, ring + pinky folded".
++ * In normalized space the middle finger points up, so a smaller y means the
++ * point is higher (more extended). */
++static bool is_two_finger_pose(const handland_res_t *res)
++{
++	const struct __post3d_s *p = res->landmark3d.pos;
++
++	bool index_up   = p[LM_INDEX_TIP].y  < p[LM_INDEX_PIP].y;
++	bool middle_up  = p[LM_MIDDLE_TIP].y < p[LM_MIDDLE_PIP].y;
++	bool ring_down  = p[LM_RING_TIP].y   >= p[LM_RING_PIP].y;
++	bool pinky_down = p[LM_PINKY_TIP].y  >= p[LM_PINKY_PIP].y;
++
++	/* Index+middle straight while ring+pinky folded cleanly rejects a fist
++	 * (nothing extended) and an open / four-finger hand (ring & pinky extended). */
++	return index_up && middle_up && ring_down && pinky_down;
++}
++
++void gesture_detect_reset(void)
++{
++	s_state.window_active = false;
++}
++
++gesture_dir_t gesture_detect_update(const struct handland_res_s *res_norm_space,
++									float palm_center_x_img, int img_width, uint32_t now_ms)
++{
++	const handland_res_t *res = (const handland_res_t *)res_norm_space;
++
++	if (!res || img_width <= 0) {
++		gesture_detect_reset();
++		return GESTURE_NONE;
++	}
++
++	/* Debounce: one swipe -> one tap. */
++	if (now_ms < s_state.lock_until_ms) {
++		return GESTURE_NONE;
++	}
++
++	if (!is_two_finger_pose(res)) {
++		gesture_detect_reset();
++		return GESTURE_NONE;
++	}
++
++	/* Pose held: (re)start or evaluate the swipe window. */
++	if (!s_state.window_active) {
++		s_state.window_active = true;
++		s_state.start_x = palm_center_x_img;
++		s_state.start_ms = now_ms;
++		return GESTURE_NONE;
++	}
++
++	/* Window expired without enough displacement -> slide window forward. */
++	if ((now_ms - s_state.start_ms) > GESTURE_SWIPE_WINDOW_MS) {
++		s_state.start_x = palm_center_x_img;
++		s_state.start_ms = now_ms;
++		return GESTURE_NONE;
++	}
++
++	float dx = palm_center_x_img - s_state.start_x;
++	if (fabsf(dx) / (float)img_width >= GESTURE_SWIPE_RATIO) {
++		s_state.window_active = false;
++		s_state.lock_until_ms = now_ms + GESTURE_DEBOUNCE_MS;
++		/* dx < 0 -> moved left ; dx > 0 -> moved right.
++		 * (Image x may be mirrored by the ISP; verify on-device and swap if needed.) */
++		return (dx < 0) ? GESTURE_LEFT : GESTURE_RIGHT;
++	}
++
++	return GESTURE_NONE;
++}
+diff --git a/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/gesture_detect.h b/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/gesture_detect.h
+new file mode 100644
+index 0000000..2985bd9
+--- /dev/null
++++ b/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/gesture_detect.h
+@@ -0,0 +1,50 @@
++/******************************************************************************
++*
++* gesture_detect.h - pure two-finger-swipe detection state machine (no I/O)
++*
++* NOTE: This header intentionally does NOT include "module_vipnn.h".
++* module_vipnn.h depends on bool / mm_module_t and would fail to compile
++* without prior includes (stdbool.h, mmf2_module.h). We forward-declare the
++* result struct here and include module_vipnn.h only inside gesture_detect.c
++* (after its prerequisites). Callers pass a handland_res_t* which is the same
++* type as the forward-declared struct handland_res_s*.
++*
++******************************************************************************/
++#ifndef GESTURE_DETECT_H
++#define GESTURE_DETECT_H
++
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* Defined in module_vipnn.h (handland_res_t == struct handland_res_s). */
++struct handland_res_s;
++
++typedef enum {
++	GESTURE_NONE = 0,
++	GESTURE_LEFT,
++	GESTURE_RIGHT
++} gesture_dir_t;
++
++/* Feed one hand-landmark result per frame.
++ *   res_norm_space    : landmarks in MODEL-NORMALIZED space (BEFORE fix_landmark),
++ *                       i.e. middle finger up. Used to count extended fingers.
++ *   palm_center_x_img : palm-center x in IMAGE space (AFTER fix_landmark). Used
++ *                       to track horizontal swipe displacement.
++ *   img_width         : image width for ratio-based threshold.
++ *   now_ms            : current time in milliseconds (FreeRTOS tick).
++ * Returns GESTURE_LEFT / GESTURE_RIGHT once per valid swipe (debounced),
++ * otherwise GESTURE_NONE. */
++gesture_dir_t gesture_detect_update(const struct handland_res_s *res_norm_space,
++									float palm_center_x_img, int img_width, uint32_t now_ms);
++
++/* Reset the swipe window/state (call when the hand leaves the frame). */
++void gesture_detect_reset(void);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /* GESTURE_DETECT_H */
+diff --git a/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/gesture_event.c b/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/gesture_event.c
+new file mode 100644
+index 0000000..c323987
+--- /dev/null
++++ b/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/gesture_event.c
+@@ -0,0 +1,88 @@
++/******************************************************************************
++*
++* gesture_event.c - UDP event sender for hand-gesture example
++*
++* Broadcasts the same wire protocol as the office presence event
++* (office_event.c): UDP broadcast 255.255.255.255:48555, JSON payload
++*   {"dev":"amb82-gesture","ts":<ms>,"gesture":"left|right"}
++* The desktop daemon (office_daemon.py) binds 48555 once and receives both
++* "amb82-office" and "amb82-gesture" events. Runs on its own non-blocking
++* sender socket alongside the RTSP stream; never touches the video pipeline.
++*
++******************************************************************************/
++#include "FreeRTOS.h"
++#include "task.h"
++#include <string.h>
++#include <platform_stdlib.h>
++
++#include "lwip/sockets.h"
++#include "lwip/inet.h"
++
++#include "platform_opts.h"
++#include "gesture_event.h"
++
++#define GESTURE_JSON_MAX  128
++
++static int gesture_sock = -1;
++static struct sockaddr_in gesture_dest;
++
++int gesture_event_init(void)
++{
++	int opt = 1;
++
++	gesture_sock = socket(AF_INET, SOCK_DGRAM, 0);
++	if (gesture_sock < 0) {
++		printf("[gesture_event] ERROR: socket() failed\n\r");
++		gesture_sock = -1;
++		return -1;
++	}
++
++	/* Allow broadcast to 255.255.255.255 (same as office_event.c). */
++	setsockopt(gesture_sock, SOL_SOCKET, SO_BROADCAST, &opt, sizeof(opt));
++
++	/* Non-blocking so a send can never stall the NN pipeline. */
++	fcntl(gesture_sock, F_SETFL, fcntl(gesture_sock, F_GETFL, 0) | O_NONBLOCK);
++
++	memset(&gesture_dest, 0, sizeof(gesture_dest));
++	gesture_dest.sin_family = AF_INET;
++	gesture_dest.sin_port = htons(GESTURE_EVENT_DEST_PORT);  /* 48555, shared bcast port */
++	gesture_dest.sin_addr.s_addr = htonl(INADDR_BROADCAST);  /* 255.255.255.255 */
++
++	printf("[gesture_event] UDP gesture events -> bcast :%d\n\r",
++		   GESTURE_EVENT_DEST_PORT);
++	return 0;
++}
++
++/* Build the JSON packet (matching office_event.c style) and broadcast it.
++ * direction must be the lowercase string "left" or "right" — the client
++ * dispatches on the exact "dev"/"gesture" strings. */
++void gesture_event_send_swipe(const char *direction)
++{
++	char json[GESTURE_JSON_MAX];
++	uint32_t t;
++	int ret;
++
++	if (gesture_sock < 0 || !direction) {
++		return;
++	}
++
++	t = (uint32_t)(xTaskGetTickCount() * portTICK_RATE_MS);
++	snprintf(json, sizeof(json),
++			 "{\"dev\":\"amb82-gesture\",\"ts\":%u,\"gesture\":\"%s\"}",
++			 (unsigned)t, direction);
++
++	ret = sendto(gesture_sock, json, strlen(json), 0,
++				 (struct sockaddr *)&gesture_dest, sizeof(gesture_dest));
++	if (ret < 0) {
++		/* Log only; never block the逐幀 DISPPOST callback. */
++		printf("[gesture_event] WARN: sendto failed\n\r");
++	}
++}
++
++void gesture_event_deinit(void)
++{
++	if (gesture_sock >= 0) {
++		close(gesture_sock);
++		gesture_sock = -1;
++	}
++}
+diff --git a/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/gesture_event.h b/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/gesture_event.h
+new file mode 100644
+index 0000000..1446754
+--- /dev/null
++++ b/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/gesture_event.h
+@@ -0,0 +1,32 @@
++/******************************************************************************
++*
++* gesture_event.h - UDP event sender for hand-gesture example
++*
++* Broadcasts JSON {"dev":"amb82-gesture","ts":<ms>,"gesture":"left|right"} over
++* a non-blocking UDP socket to 255.255.255.255:48555 — the same broadcast port
++* as office_event.c. The PC-side desktop app turns these into arrow keys.
++*
++******************************************************************************/
++#ifndef GESTURE_EVENT_H
++#define GESTURE_EVENT_H
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* Create the UDP socket and prepare the destination address.
++ * Returns 0 on success, non-zero on failure (logged). */
++int gesture_event_init(void);
++
++/* Broadcast a swipe event as JSON. direction is "left" or "right" (lowercase).
++ * Non-blocking; failures are logged and ignored so the NN pipeline never stalls. */
++void gesture_event_send_swipe(const char *direction);
++
++/* Close the UDP socket. */
++void gesture_event_deinit(void);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /* GESTURE_EVENT_H */
+diff --git a/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/mmf2_video_example_vipnn_handgesture_init.c b/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/mmf2_video_example_vipnn_handgesture_init.c
+index 33b7bc3..0290564 100755
+--- a/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/mmf2_video_example_vipnn_handgesture_init.c
++++ b/project/realtek_amebapro2_v0_example/src/mmfv2_video_example/mmf2_video_example_vipnn_handgesture_init.c
+@@ -17,6 +17,8 @@
+ #include "hal_video.h"
+ #include "hal_isp.h"
+ #include "roi_delta_qp/roi_delta_qp.h"
++#include "gesture_event.h"
++#include "gesture_detect.h"
+ #include <math.h>
+ 
+ /*****************************************************************************
+@@ -228,9 +230,23 @@ static void draw_hand_object(void *p, void *img_param)
+ 
+ 	if (res->handedness != HANDEDNESS_NOTFOUND) {
+ 		//printf("theta:%f w:%d h:%d\r\n", res->theta, res->w, res->h);
++		// Snapshot normalized-space landmarks (middle finger up) for finger counting
++		// BEFORE fix_landmark() rotates/scales them into image space in place.
++		handland_res_t res_norm = *res;
+ 		if (fix_landmark(res) < 0) {
+ 			return;
+ 		}
++		// Two-finger swipe -> UDP arrow-key event. Pose uses normalized landmarks;
++		// horizontal displacement uses image-space palm center (landmark 9).
++		uint32_t now_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
++		float palm_center_x = res->landmark3d.pos[9].x;
++		gesture_dir_t dir = gesture_detect_update(&res_norm, palm_center_x,
++												  handlandmark_nn_roi.img.width, now_ms);
++		if (dir == GESTURE_LEFT) {
++			gesture_event_send_swipe("left");
++		} else if (dir == GESTURE_RIGHT) {
++			gesture_event_send_swipe("right");
++		}
+ 
+ 		//First, draw the points for the joints.
+ 		for (int i = 0; i < HAND_LANDMARK_NUM; i++) {
+@@ -286,6 +302,9 @@ static void draw_hand_object(void *p, void *img_param)
+ 		if (osd_cleanup_timer) {
+ 			xTimerReset(osd_cleanup_timer, 10);
+ 		}
++	} else {
++		// Hand left the frame: clear swipe state so stale displacement can't misfire.
++		gesture_detect_reset();
+ 	}
+ 
+ 	canvas_update(RTSP_CHANNEL, HAND_JOINT_LAYER, 0);
+@@ -428,6 +447,9 @@ void mmf2_video_example_vipnn_handgesture_init(void)
+ 	canvas_update(RTSP_CHANNEL, HAND_DETECT_REGION_LAYER, 1);
+ 
+ 	osd_cleanup_timer = xTimerCreate("OSD clean timer", 1000 / portTICK_PERIOD_MS, pdTRUE, NULL, hand_cleanup_callback);
++
++	// Init UDP sender for two-finger swipe events (network already up via RTSP).
++	gesture_event_init();
+ 	return;
+ 
+ mmf2_video_example_vipnn_handgesture_fail:
